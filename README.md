@@ -2,14 +2,6 @@
 
 `AI Prompt Bridge` 是一個給 **Opera / Chrome / Edge + Tampermonkey** 使用的跨 AI 搬運工腳本。
 
-這版從 **v1.0.0** 開始，檔名與品牌名稱已整理為：
-
-```text
-AI Prompt Bridge
-```
-
-原本的 `rossi-` 前綴已移除，方便上傳到 Git。
-
 ---
 
 ## 1. 專案檔案
