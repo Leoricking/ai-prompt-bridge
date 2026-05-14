@@ -890,15 +890,3 @@ CHANGELOG.md
 OneNote 放摘要與決策，Git 放正式規格與可追溯文件。
 
 ---
-
-## 16. Git Commit
-
-建議 commit message：
-
-```bash
-git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
-git commit -m "feat: add OneNote decision-note export prompt" -m "- Add Alt+N shortcut and panel button for OneNote / Notion / Markdown note generation.
-- Add OneNote decision-note prompt builder for captured content or full-session exports.
-- Preserve raw AI output while enabling structured knowledge capture.
-- Update README with OneNote workflow, note template, and usage steps."
-```
