@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         AI Prompt Bridge
 // @namespace    https://ai-prompt-bridge.local/ai-prompt-bridge
-// @version      1.0.0
-// @description  Cross-AI prompt bridge for ChatGPT, Gemini, Claude, DeepSeek, Qwen, Perplexity and Cursor workflows. Adds full-session copy, reset panel, always-visible restore bubble.
+// @version      1.2.0
+// @description  Cross-AI prompt bridge for ChatGPT, Gemini, Claude, DeepSeek, Qwen, Perplexity and Cursor workflows. Adds OneNote / Markdown decision-note prompt generation.
 // @author       Rossi
 // @match        https://chatgpt.com/*
 // @match        https://chat.openai.com/*
@@ -22,12 +22,12 @@
 (function () {
     "use strict";
 
-    const STORAGE_KEY = "ai_prompt_bridge_payload_v10";
-    const PANEL_POS_KEY = "ai_prompt_bridge_panel_position_v10";
-    const PANEL_ID = "ai-prompt-bridge-panel-v10";
-    const BUBBLE_ID = "ai-prompt-bridge-restore-bubble-v10";
-    const COLLAPSED_KEY = "ai_prompt_bridge_collapsed_v10";
-    const HIDDEN_KEY = "ai_prompt_bridge_hidden_v10";
+    const STORAGE_KEY = "ai_prompt_bridge_payload_v12";
+    const PANEL_POS_KEY = "ai_prompt_bridge_panel_position_v12";
+    const PANEL_ID = "ai-prompt-bridge-panel-v12";
+    const BUBBLE_ID = "ai-prompt-bridge-restore-bubble-v12";
+    const COLLAPSED_KEY = "ai_prompt_bridge_collapsed_v12";
+    const HIDDEN_KEY = "ai_prompt_bridge_hidden_v12";
 
     const PROJECT_PRESETS = {
         mp3: "C:/Users/Rossi/Documents/Claude/mp3_auto_edit/music_manager_GUI",
@@ -319,22 +319,48 @@
     }
 
     function getGenericSession() {
-        const main = document.querySelector("main") || document.body;
-        return normalizeText(main.innerText || main.textContent || "");
+        const candidates = [
+            document.querySelector("main"),
+            document.querySelector('[role="main"]'),
+            document.querySelector('[data-testid*="conversation"]'),
+            document.querySelector(".conversation"),
+            document.querySelector(".chat"),
+            document.body
+        ].filter(Boolean);
+
+        let best = "";
+
+        candidates.forEach((element) => {
+            const text = normalizeText(element.innerText || element.textContent || "");
+            if (text.length > best.length) {
+                best = text;
+            }
+        });
+
+        return best;
     }
 
     function getCurrentSessionText() {
         const site = getSiteName();
 
-        let content = "";
-        if (site === "ChatGPT") content = getChatGPTSession();
-        if (site === "Gemini") content = getGeminiSession();
-        if (site === "Claude") content = getClaudeSession();
-        if (site === "DeepSeek") content = getDeepSeekSession();
-        if (site === "Perplexity") content = getPerplexitySession();
+        let structuredContent = "";
+        if (site === "ChatGPT") structuredContent = getChatGPTSession();
+        if (site === "Gemini") structuredContent = getGeminiSession();
+        if (site === "Claude") structuredContent = getClaudeSession();
+        if (site === "DeepSeek") structuredContent = getDeepSeekSession();
+        if (site === "Perplexity") structuredContent = getPerplexitySession();
+
+        const genericContent = getGenericSession();
+
+        // Use the longer result because some AI sites virtualize or change message selectors.
+        // Manual Ctrl+A often follows the rendered page text, which is closer to genericContent.
+        let content = structuredContent;
+        if (genericContent && genericContent.length > structuredContent.length * 1.25) {
+            content = genericContent;
+        }
 
         if (!content) {
-            content = getGenericSession();
+            content = genericContent || structuredContent;
         }
 
         const header = [
@@ -367,13 +393,15 @@
         return Boolean(payload && payload.content);
     }
 
-    async function savePayload(text, sourceType = "last-answer") {
+    async function savePayload(text, sourceType = "last-answer", options = {}) {
+        const preserveRaw = Boolean(options.preserveRaw);
+
         const payload = {
             source: getSiteName(),
             sourceUrl: location.href,
             sourceType,
             createdAt: nowText(),
-            content: preferCodeOrText(text)
+            content: preserveRaw ? normalizeText(text) : preferCodeOrText(text)
         };
 
         await gmSet(STORAGE_KEY, payload);
@@ -543,6 +571,71 @@
         ].join("\n");
     }
 
+    function buildOneNotePrompt(payload) {
+        const content = payload?.content || "";
+
+        return [
+            makeHeader(payload),
+            "",
+            "請把以下內容整理成「可直接貼到 OneNote / Notion / Markdown」的決策筆記。",
+            "",
+            "整理原則：",
+            "1. 不要保留廢話。",
+            "2. 不要逐字摘要，請整理成可執行筆記。",
+            "3. 保留最終結論、具體步驟、風險、待辦。",
+            "4. 如果是專案內容，請補上可同步到 README.md / docs 的版本。",
+            "5. 如果有指令、Prompt、Git commit、測試步驟，請用 code block 保留。",
+            "6. 如果內容有多個模型意見，請標記來源：ChatGPT / Gemini / DeepSeek / Claude / Perplexity / 我的最終決策。",
+            "7. 若資訊不足，請列在「未確認風險」。",
+            "",
+            "輸出格式必須如下：",
+            "",
+            "# 主題",
+            "",
+            "## 1. 最終結論",
+            "-",
+            "",
+            "## 2. 背景",
+            "-",
+            "",
+            "## 3. 適用情境",
+            "-",
+            "",
+            "## 4. 可執行步驟",
+            "1.",
+            "2.",
+            "3.",
+            "",
+            "## 5. 不可破壞原則 / 保留原則",
+            "-",
+            "",
+            "## 6. 指令 / Prompt / Git Commit / 測試步驟",
+            "```text",
+            "",
+            "```",
+            "",
+            "## 7. 風險與注意事項",
+            "-",
+            "",
+            "## 8. 下一步待辦",
+            "- [ ]",
+            "- [ ]",
+            "",
+            "## 9. 可同步到 README / docs 的內容",
+            "-",
+            "",
+            "## 10. 來源",
+            "- Source:",
+            "- Date:",
+            "- AI:",
+            "",
+            "原始內容：",
+            "```text",
+            content,
+            "```"
+        ].join("\\n");
+    }
+
     async function captureCurrentAnswer() {
         const selected = getSelectedText();
         const text = getLastAnswer();
@@ -565,8 +658,11 @@
             return;
         }
 
-        const payload = await savePayload(text, "full-session");
-        copyText(payload.content, `已複製完整 Session：${payload.source}`);
+        // Full-session export must preserve raw text.
+        // Do NOT run preferCodeOrText() here, otherwise any Markdown code block will cause
+        // the exporter to keep only code blocks and drop normal conversation text.
+        const payload = await savePayload(text, "full-session", { preserveRaw: true });
+        copyText(payload.content, `已複製完整 Session：${payload.source}（${payload.content.length} 字）`);
     }
 
     async function copyRawPayload() {
@@ -852,6 +948,7 @@
         content.appendChild(createButton("⑤ 給 ChatGPT 轉 Cursor Alt+V", () => copyPrompt(buildCursorFix, "已複製 Cursor Fix Prompt"), "#059669"));
         content.appendChild(createButton("⑥ 變成 Cursor Rule", () => copyPrompt(buildRule, "已複製 Make Rule Prompt"), "#7c3aed"));
         content.appendChild(createButton("⑦ 複製整個 Session Alt+S", captureFullSession, "#be123c"));
+        content.appendChild(createButton("⑨ 整理成 OneNote 筆記 Alt+N", () => copyPrompt(buildOneNotePrompt, "已複製 OneNote 筆記整理 Prompt"), "#d97706"));
         content.appendChild(createButton("⑧ 重置面板位置", async () => {
             const p = document.getElementById(PANEL_ID);
             if (p) {
@@ -862,7 +959,7 @@
         }, "#0f766e"));
 
         const hint = document.createElement("div");
-        hint.textContent = "Alt+C 抓原文 / Alt+V Cursor Prompt / Alt+S session / Alt+B hide/show";
+        hint.textContent = "Alt+C 抓原文 / Alt+V Cursor / Alt+S session / Alt+N OneNote / Alt+B hide/show";
         hint.style.fontSize = "11px";
         hint.style.color = "#d1d5db";
         hint.style.marginTop = "2px";
@@ -915,6 +1012,11 @@
         if (event.altKey && !event.shiftKey && !event.ctrlKey && key === "s") {
             event.preventDefault();
             await captureFullSession();
+        }
+
+        if (event.altKey && !event.shiftKey && !event.ctrlKey && key === "n") {
+            event.preventDefault();
+            await copyPrompt(buildOneNotePrompt, "已複製 OneNote 筆記整理 Prompt");
         }
 
         if (event.altKey && !event.shiftKey && !event.ctrlKey && key === "b") {

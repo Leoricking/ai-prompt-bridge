@@ -1,4 +1,4 @@
-# AI Prompt Bridge v1.0
+# AI Prompt Bridge v1.1
 
 `AI Prompt Bridge` 是一個給 **Opera / Chrome / Edge + Tampermonkey** 使用的跨 AI 搬運工腳本。
 
@@ -46,6 +46,7 @@ Gemini 看圖 / UI 診斷
 要轉成 Cursor 修正 → Alt+V
 要貼給目標 AI → Ctrl+V
 要複製整段對話 → Alt+S
+要整理成 OneNote / Notion / Markdown 決策筆記 → Alt+N
 ```
 
 對應意思：
@@ -54,6 +55,7 @@ Gemini 看圖 / UI 診斷
 Alt+C = 抓目前這邊的原文 + 複製到剪貼簿 + 存入腳本暫存區
 Alt+V = 把暫存內容轉成 Cursor Fix Prompt + 複製到剪貼簿
 Alt+S = 複製目前頁面的整個 session 對話 + 存入暫存區
+Alt+N = 把暫存內容轉成 OneNote / Notion / Markdown 決策筆記整理 Prompt + 複製到剪貼簿
 Ctrl+V = 真正貼到輸入框
 ```
 
@@ -119,6 +121,38 @@ Alt+S = 複製目前頁面的整段 session 對話
 
 ---
 
+## 6.1 Alt+N 是幹嘛？
+
+```text
+Alt+N = 把目前暫存內容轉成「OneNote / Notion / Markdown 決策筆記整理 Prompt」
+```
+
+它不是直接把原始長文貼進 OneNote，而是先讓 AI 幫你整理成可執行筆記。
+
+適合：
+
+```text
+1. 把 ChatGPT / Gemini / DeepSeek / Claude 的長文整理成決策筆記
+2. 把完整 session 轉成 OneNote 可讀格式
+3. 把專案討論整理成 README / docs 可同步內容
+4. 把 Git commit、Prompt、測試步驟、風險、下一步整理成固定格式
+```
+
+使用方式：
+
+```text
+1. 在來源 AI 按 Alt+C，或用 Alt+S 複製整段 session
+2. 切到 ChatGPT
+3. 按 Alt+N，或點 ⑨ 整理成 OneNote 筆記
+4. ChatGPT 輸入框 Ctrl+V
+5. 送出
+6. 把 ChatGPT 產出的整理後筆記貼到 OneNote / Notion / Markdown
+```
+
+建議：OneNote 只放「整理後的決策筆記」，不要直接塞 AI 原始長文。
+
+---
+
 ## 7. 面板按鈕
 
 ```text
@@ -130,6 +164,7 @@ Alt+S = 複製目前頁面的整段 session 對話
 ⑥ 變成 Cursor Rule
 ⑦ 複製整個 Session Alt+S
 ⑧ 重置面板位置
+⑨ 整理成 OneNote 筆記 Alt+N
 🙈 隱藏 Alt+B
 ```
 
@@ -142,6 +177,7 @@ Alt+S = 複製目前頁面的整段 session 對話
 | Alt+C | 抓目前頁面內容，存暫存區，並複製原文 |
 | Alt+V | 把暫存內容轉成 Cursor Fix prompt，並複製 |
 | Alt+S | 複製目前頁面的整個 session 對話 |
+| Alt+N | 把暫存內容轉成 OneNote / Notion / Markdown 決策筆記整理 prompt |
 | Alt+B | 隱藏 / 顯示面板；如果面板不見，強制顯示到右下角 |
 | Alt+R | 強制重置面板位置到右下角 |
 
@@ -659,6 +695,7 @@ ChatGPT → Gemini → Claude → ChatGPT → Cursor
 | 給 ChatGPT 轉 Cursor prompt | ⑤ 給 ChatGPT 轉 Cursor / Alt+V |
 | 變成 Cursor Rule | ⑥ 變成 Cursor Rule |
 | 複製整段對話 | ⑦ 複製整個 Session / Alt+S |
+| 整理成 OneNote / Notion / Markdown 決策筆記 | ⑨ 整理成 OneNote 筆記 / Alt+N |
 | 面板不見或跑掉 | ⑧ 重置面板位置 / Alt+R |
 
 ---
@@ -693,4 +730,175 @@ Alt+C：抓目前這邊
 Alt+V：轉成 Cursor 任務
 Ctrl+V：貼上
 Alt+S：整段 session
+```
+
+---
+
+## 15. OneNote / Notion / Markdown 一鍵整理
+
+### 15.1 功能目的
+
+`Alt+N` / `⑨ 整理成 OneNote 筆記` 的目標是：
+
+```text
+把 AI 原始長文 → 整理成可執行決策筆記 → 再貼到 OneNote / Notion / Markdown
+```
+
+不要把 ChatGPT / Gemini 的回覆整段無腦貼進 OneNote。  
+最有效率的做法是先把 AI 回覆壓縮成「可執行筆記」，再進 OneNote。
+
+---
+
+### 15.2 使用流程：單段內容整理
+
+```text
+1. 在 ChatGPT / Gemini / DeepSeek / Claude 找到有用內容
+2. 按 Alt+C 抓取內容
+3. 切到 ChatGPT
+4. 按 Alt+N，或點 ⑨ 整理成 OneNote 筆記
+5. ChatGPT 輸入框 Ctrl+V
+6. 送出
+7. 把 ChatGPT 產出的整理後筆記貼到 OneNote / Notion / Markdown
+```
+
+---
+
+### 15.3 使用流程：整段 Session 整理
+
+```text
+1. 在目前 AI 頁面按 Alt+S
+2. 切到 ChatGPT
+3. 按 Alt+N
+4. ChatGPT 輸入框 Ctrl+V
+5. 送出
+6. 將整理後版本貼到 OneNote / Notion / Markdown
+```
+
+---
+
+### 15.4 OneNote 決策筆記格式
+
+`Alt+N` 會要求 AI 輸出以下格式：
+
+```text
+# 主題
+
+## 1. 最終結論
+
+## 2. 背景
+
+## 3. 適用情境
+
+## 4. 可執行步驟
+
+## 5. 不可破壞原則 / 保留原則
+
+## 6. 指令 / Prompt / Git Commit / 測試步驟
+
+## 7. 風險與注意事項
+
+## 8. 下一步待辦
+
+## 9. 可同步到 README / docs 的內容
+
+## 10. 來源
+```
+
+---
+
+### 15.5 推薦資料分工
+
+```text
+OneNote：整理想法、決策、待辦、跨專案總覽
+Git / Markdown：專案正式文件、README、bugfix log、commit
+NotebookLM：大量文件查詢、簡報 / PDF / 長文摘要
+本地 Archive：保存 AI 原始輸出、附件、log
+```
+
+建議不要只用 OneNote 當最終資料庫：
+
+```text
+OneNote = 人腦決策筆記
+Git / Markdown = 專案正式規格
+NotebookLM = 大量文件二次查詢
+本地 Archive = AI 原始輸出保存
+```
+
+---
+
+### 15.6 OneNote 分區建議
+
+```text
+AI 工作知識庫
+├── 00_Inbox_待整理
+├── 01_專案決策
+├── 02_程式修正原則
+├── 03_股票投資框架
+├── 04_工作簡報素材
+├── 05_影片剪輯
+├── 06_AI工具與Prompt
+├── 07_生活決策
+└── 99_Archive
+```
+
+每一頁命名建議：
+
+```text
+日期_主題_來源
+```
+
+例如：
+
+```text
+2026-05-14_TabsManager資料備份策略_ChatGPT
+2026-05-14_Gemini與ChatGPT資訊整理流程
+2026-05-14_IOWN Rack 老闆報告素材
+```
+
+---
+
+### 15.7 專案內容同步到 Git
+
+專案類內容不要只放 OneNote。
+
+例如：
+
+```text
+Tabs Manager Pro
+Media Batch Downloader
+Music Studio
+Media2Txt-Pro
+Torrential Video Pro
+SmartCleanerPro
+TW Quant Cockpit
+```
+
+建議同步到專案內：
+
+```text
+/docs/
+  PROJECT_CONTEXT.md
+  BUGFIX_LOG.md
+  DESIGN_DECISIONS.md
+  PROMPTS.md
+  TEST_LOG.md
+
+README.md
+CHANGELOG.md
+```
+
+OneNote 放摘要與決策，Git 放正式規格與可追溯文件。
+
+---
+
+## 16. Git Commit
+
+建議 commit message：
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "feat: add OneNote decision-note export prompt" -m "- Add Alt+N shortcut and panel button for OneNote / Notion / Markdown note generation.
+- Add OneNote decision-note prompt builder for captured content or full-session exports.
+- Preserve raw AI output while enabling structured knowledge capture.
+- Update README with OneNote workflow, note template, and usage steps."
 ```
