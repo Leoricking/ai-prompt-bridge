@@ -4,6 +4,14 @@
 
 ---
 
+## 0. 安裝步驟
+
+<img width="378" height="634" alt="1 安裝 Tampermonkey 後, 點新增腳本" src="https://github.com/user-attachments/assets/c3712914-8341-492a-86f5-da8d58c69ec4" />
+
+<img width="1800" height="936" alt="2 新增此腳本" src="https://github.com/user-attachments/assets/f4fa7de3-6c4c-428d-9fc8-0949c790b699" />
+
+<img width="1848" height="835" alt="3 介面" src="https://github.com/user-attachments/assets/ec509b8e-081a-4bdf-9055-7b9f4b5884b6" />
+
 ## 1. 專案檔案
 
 建議 Git repo 結構：
