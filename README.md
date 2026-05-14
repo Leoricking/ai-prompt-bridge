@@ -14,7 +14,7 @@
 
 ## 1. 專案檔案
 
-建議 Git repo 結構：
+Git repo 結構：
 
 ```text
 ai-prompt-bridge/
