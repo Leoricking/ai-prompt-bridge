@@ -1,9 +1,18 @@
-# AI Prompt Bridge v1.1
+# AI Prompt Bridge v1.4
 
 `AI Prompt Bridge` 是一個給 **Opera / Chrome / Edge + Tampermonkey** 使用的跨 AI 搬運工腳本。
 
+這版從 **v1.0.0** 開始，檔名與品牌名稱已整理為：
+
+```text
+AI Prompt Bridge
+```
+
+原本的 `rossi-` 前綴已移除，方便上傳到 Git。
+
 ---
 
+<<<<<<< HEAD
 ## 0. 安裝步驟
 
 安裝 Tampermonkey
@@ -23,9 +32,11 @@
 介面
 <img width="1848" height="835" alt="3 介面" src="https://github.com/user-attachments/assets/ec509b8e-081a-4bdf-9055-7b9f4b5884b6" />
 
+=======
+>>>>>>> b486c85 (feat: add project-aware prompt presets)
 ## 1. 專案檔案
 
-Git repo 結構：
+建議 Git repo 結構：
 
 ```text
 ai-prompt-bridge/
@@ -57,7 +68,6 @@ Gemini 看圖 / UI 診斷
 要轉成 Cursor 修正 → Alt+V
 要貼給目標 AI → Ctrl+V
 要複製整段對話 → Alt+S
-要整理成 OneNote / Notion / Markdown 決策筆記 → Alt+N
 ```
 
 對應意思：
@@ -66,7 +76,6 @@ Gemini 看圖 / UI 診斷
 Alt+C = 抓目前這邊的原文 + 複製到剪貼簿 + 存入腳本暫存區
 Alt+V = 把暫存內容轉成 Cursor Fix Prompt + 複製到剪貼簿
 Alt+S = 複製目前頁面的整個 session 對話 + 存入暫存區
-Alt+N = 把暫存內容轉成 OneNote / Notion / Markdown 決策筆記整理 Prompt + 複製到剪貼簿
 Ctrl+V = 真正貼到輸入框
 ```
 
@@ -132,38 +141,6 @@ Alt+S = 複製目前頁面的整段 session 對話
 
 ---
 
-## 6.1 Alt+N 是幹嘛？
-
-```text
-Alt+N = 把目前暫存內容轉成「OneNote / Notion / Markdown 決策筆記整理 Prompt」
-```
-
-它不是直接把原始長文貼進 OneNote，而是先讓 AI 幫你整理成可執行筆記。
-
-適合：
-
-```text
-1. 把 ChatGPT / Gemini / DeepSeek / Claude 的長文整理成決策筆記
-2. 把完整 session 轉成 OneNote 可讀格式
-3. 把專案討論整理成 README / docs 可同步內容
-4. 把 Git commit、Prompt、測試步驟、風險、下一步整理成固定格式
-```
-
-使用方式：
-
-```text
-1. 在來源 AI 按 Alt+C，或用 Alt+S 複製整段 session
-2. 切到 ChatGPT
-3. 按 Alt+N，或點 ⑨ 整理成 OneNote 筆記
-4. ChatGPT 輸入框 Ctrl+V
-5. 送出
-6. 把 ChatGPT 產出的整理後筆記貼到 OneNote / Notion / Markdown
-```
-
-建議：OneNote 只放「整理後的決策筆記」，不要直接塞 AI 原始長文。
-
----
-
 ## 7. 面板按鈕
 
 ```text
@@ -175,7 +152,6 @@ Alt+N = 把目前暫存內容轉成「OneNote / Notion / Markdown 決策筆記�
 ⑥ 變成 Cursor Rule
 ⑦ 複製整個 Session Alt+S
 ⑧ 重置面板位置
-⑨ 整理成 OneNote 筆記 Alt+N
 🙈 隱藏 Alt+B
 ```
 
@@ -188,7 +164,6 @@ Alt+N = 把目前暫存內容轉成「OneNote / Notion / Markdown 決策筆記�
 | Alt+C | 抓目前頁面內容，存暫存區，並複製原文 |
 | Alt+V | 把暫存內容轉成 Cursor Fix prompt，並複製 |
 | Alt+S | 複製目前頁面的整個 session 對話 |
-| Alt+N | 把暫存內容轉成 OneNote / Notion / Markdown 決策筆記整理 prompt |
 | Alt+B | 隱藏 / 顯示面板；如果面板不見，強制顯示到右下角 |
 | Alt+R | 強制重置面板位置到右下角 |
 
@@ -301,466 +276,74 @@ Alt+N = 把目前暫存內容轉成「OneNote / Notion / Markdown 決策筆記�
 17. Cursor 執行
 ```
 
-## 14. ChatGPT / Gemini / DeepSeek / Claude 使用情境
-
-### 一句話總結
-
-```text
-Gemini：看圖、看 UI、找畫面問題
-ChatGPT：主腦、整合、產 Cursor 最終修正 prompt
-DeepSeek：審 code、抓語法、抓邏輯漏洞
-Claude：保守複審、架構穩定性、避免改壞原功能
-Cursor：真正改檔案
-```
+---
 
 ---
 
-### 14.1 ChatGPT 使用情境
+## Alt+S 全部複製修正說明 v1.1
 
-ChatGPT 是主控台，負責最後整合與決策。
+### 問題現象
 
-#### 適合做什麼
+舊版 `Alt+S` 在某些對話中會只複製到部分內容，尤其是對話裡出現 Markdown code block 時，可能只留下 code block 或從中間開始的片段。
 
-```text
-1. 整理 Gemini 的 UI 診斷
-2. 整理 DeepSeek 的 code review
-3. 整理 Claude 的保守建議
-4. 產生給 Cursor Composer 的最終 prompt
-5. 寫完整修正策略
-6. 決定哪些建議採用、哪些不採用
-7. 把成功經驗整理成 .cursor/rules
-```
+### 原因
 
-#### 不建議只讓 ChatGPT 做什麼
+`Alt+S` 原本也走一般 `savePayload()` 流程，而一般流程會呼叫 `preferCodeOrText()`。
+
+這個邏輯是為了 `Alt+C` 抓單段 code 時方便使用：
 
 ```text
-1. 單獨判斷 UI 截圖細節
-2. 單獨猜 icon 對齊問題
-3. 沒有讓其他模型 review 就直接大改專案
+如果內容裡有 ```code block```，就優先保留 code block。
 ```
 
-#### Gemini → ChatGPT
+但對 `Alt+S` 來說這是錯的，因為「完整 session」必須保留所有對話文字，而不是只保留 code block。
+
+### v1.1 修正
 
 ```text
-Gemini 看圖完成
-→ Gemini Alt+C
-→ ChatGPT Alt+V
-→ Ctrl+V
-→ 送出
+1. Alt+S 改成 preserveRaw 模式。
+2. 完整 session 不再經過 preferCodeOrText()。
+3. 若 structured selector 抓到的內容太短，會改用 main/body 中較長的頁面文字。
+4. 複製成功提示會顯示字數，方便確認是否只抓到片段。
+5. storage key 更新到 v1.1，避免舊暫存污染測試。
 ```
 
-用途：
+### v1.1 測試方式
 
 ```text
-讓 ChatGPT 把 Gemini 診斷整理成 Cursor prompt
+1. 開啟 ChatGPT 或 Gemini 對話
+2. 確認頁面已載入你要複製的內容
+3. 按 Alt+S
+4. 開記事本
+5. Ctrl+V
+6. 檢查是否從對話開頭開始，而不是只從中間 code block 開始
 ```
 
-#### DeepSeek → ChatGPT
+### 注意事項
 
 ```text
-DeepSeek code review 完成
-→ DeepSeek Alt+C
-→ ChatGPT Alt+V
-→ Ctrl+V
-→ 送出
+Alt+S 只能複製目前頁面已載入到 DOM 的內容。
+如果對話很長，請先往上捲動，讓舊訊息載入後再按 Alt+S。
 ```
 
-用途：
-
-```text
-讓 ChatGPT 整合 DeepSeek 的 bug 風險，產出最小修正方案
-```
-
-#### Claude → ChatGPT
-
-```text
-Claude 複審完成
-→ Claude Alt+C
-→ ChatGPT Alt+V
-→ Ctrl+V
-→ 送出
-```
-
-用途：
-
-```text
-讓 ChatGPT 整合 Claude 的保守建議，避免 Cursor 改壞原本功能
-```
 
 ---
 
-### 14.2 Gemini 使用情境
+## OneNote / Notion / Markdown 一鍵整理 v1.2
 
-Gemini 是視覺 QA，主要負責看圖、看 UI、找畫面問題。
+### 功能目的
 
-#### 適合做什麼
-
-```text
-1. 看 UI 截圖
-2. 找 icon 偏移
-3. 找 label 重複
-4. 找 spacing / padding / alignment 問題
-5. 看按鈕位置是否合理
-6. 看畫面是否被 panel 擋住
-7. 分析 GUI 視覺問題
-8. 檢查 ChatGPT 提出的 UI 修法是否合理
-```
-
-#### 不建議讓 Gemini 做什麼
+v1.2 新增：
 
 ```text
-1. 最後決定完整架構
-2. 單獨產生大型 code 改版
-3. 在沒有專案檔案時猜太深的程式邏輯
+⑨ 整理成 OneNote 筆記 Alt+N
 ```
 
-#### Gemini 看圖後丟給 ChatGPT
+這個功能不是直接把原始長文丟進 OneNote，而是幫你把目前暫存內容包成「請 AI 整理成決策筆記」的 Prompt。
 
-```text
-Gemini 上傳截圖
-→ Gemini 產生 UI 診斷
-→ Gemini Alt+C
-→ ChatGPT Alt+V
-→ Ctrl+V
-→ 送出
-```
+原因是：AI 原始回答通常很長，直接貼到 OneNote 很快會變成一堆看似有用、但找不到重點的資料。正確做法是先壓縮成「可執行筆記」，再進 OneNote / Notion / Markdown。
 
-適合：
-
-```text
-標題重複
-icon 沒對齊
-播放控制列跑版
-progress window 殘留
-圖片 / 封面 / layout 問題
-```
-
-#### ChatGPT 修法給 Gemini 複審
-
-```text
-ChatGPT 產出 UI 修法
-→ ChatGPT Alt+C
-→ Gemini 點 ③ 給 Gemini 看 UI
-→ Ctrl+V
-→ 送出
-```
-
-用途：
-
-```text
-讓 Gemini 檢查 ChatGPT 修法是否還有畫面風險
-```
-
----
-
-### 14.3 DeepSeek 使用情境
-
-DeepSeek 是 code reviewer，主要負責檢查程式碼細節。
-
-#### 適合做什麼
-
-```text
-1. 審查 ChatGPT 產出的 code
-2. 找語法錯誤
-3. 找漏 import
-4. 找變數未定義
-5. 找邏輯邊界錯誤
-6. 找 thread-safety 風險
-7. 找 Windows path / encoding 問題
-8. 找可能造成 regression 的修改
-```
-
-#### 不建議讓 DeepSeek 做什麼
-
-```text
-1. 單獨決定 UI 視覺問題
-2. 單獨重構整個專案
-3. 取代 ChatGPT 做最終整合
-```
-
-#### ChatGPT code → DeepSeek review
-
-```text
-ChatGPT 產出 code 或修正策略
-→ ChatGPT Alt+C
-→ DeepSeek 點 ④ 給對方審 Code
-→ Ctrl+V
-→ 送出
-```
-
-DeepSeek 應該回答：
-
-```text
-1. 哪裡可能壞
-2. 哪裡會 regression
-3. 哪裡有漏 import / 變數錯
-4. 哪裡不該改
-5. 最小修正建議
-```
-
-#### DeepSeek review → ChatGPT 整合
-
-```text
-DeepSeek review 完成
-→ DeepSeek Alt+C
-→ ChatGPT Alt+V
-→ Ctrl+V
-→ 送出
-```
-
-用途：
-
-```text
-讓 ChatGPT 把 DeepSeek review 整合成 Cursor 最終修正 prompt
-```
-
----
-
-### 14.4 Claude 使用情境
-
-Claude 是保守資深工程師，主要用來避免改壞原本功能。
-
-#### 適合做什麼
-
-```text
-1. 大型修改前做風險評估
-2. 檢查是否破壞原本功能
-3. 檢查架構是否合理
-4. 檢查 Cursor prompt 是否太危險
-5. 幫你寫 .cursor/rules
-6. 幫你拆大型任務
-7. 保守複審 ChatGPT / DeepSeek 的建議
-```
-
-#### 不建議讓 Claude 做什麼
-
-```text
-1. 每個小 bug 都問，浪費額度
-2. 免費額度下做大量長 code 來回
-3. 直接讓它重寫完整專案
-```
-
-#### ChatGPT 最終方案 → Claude 複審
-
-```text
-ChatGPT 產出 Cursor prompt
-→ ChatGPT Alt+C
-→ Claude 點 ④ 給對方審 Code
-→ Ctrl+V
-→ 送出
-```
-
-Claude 應該檢查：
-
-```text
-1. 是否會破壞原本功能
-2. 是否改太大
-3. 是否可以更小範圍修
-4. 是否缺少測試
-5. 是否應該先備份 / 分支
-```
-
-#### Claude 複審 → ChatGPT 收斂
-
-```text
-Claude 回答完成
-→ Claude Alt+C
-→ ChatGPT Alt+V
-→ Ctrl+V
-→ 送出
-```
-
-用途：
-
-```text
-讓 ChatGPT 把 Claude 的保守建議合併進 Cursor prompt
-```
-
----
-
-### 14.5 推薦的四模型工作流
-
-#### A. UI bug 工作流
-
-適合：
-
-```text
-icon 沒對齊
-標題重複
-視窗殘留
-按鈕跑版
-layout 錯誤
-```
-
-流程：
-
-```text
-1. Gemini 看截圖
-2. Gemini Alt+C
-3. ChatGPT Alt+V
-4. ChatGPT 產 Cursor prompt
-5. Cursor 修改
-6. 修完截圖再給 Gemini 看
-7. 成功後 ChatGPT Make Rule
-```
-
-簡化版：
-
-```text
-Gemini → ChatGPT → Cursor
-```
-
----
-
-#### B. Code bug 工作流
-
-適合：
-
-```text
-程式報錯
-功能壞掉
-下載失敗
-播放錯誤
-資料消失
-thread 卡死
-encoding error
-```
-
-流程：
-
-```text
-1. ChatGPT 分析 log / code
-2. ChatGPT Alt+C
-3. DeepSeek 點 ④ Code Review
-4. DeepSeek Alt+C
-5. ChatGPT Alt+V
-6. ChatGPT 產 Cursor prompt
-7. Cursor 修改
-```
-
-簡化版：
-
-```text
-ChatGPT → DeepSeek → ChatGPT → Cursor
-```
-
----
-
-#### C. 大型修改工作流
-
-適合：
-
-```text
-新增功能
-改 UI 架構
-改下載流程
-改音樂整理邏輯
-改 queue / lyrics / playback
-```
-
-流程：
-
-```text
-1. ChatGPT 拆需求
-2. Gemini 看 UI / UX
-3. DeepSeek 審 code 細節
-4. Claude 做保守架構複審
-5. ChatGPT 收斂成 Cursor prompt
-6. Cursor 分批修改
-7. 每成功一段就 Make Rule
-```
-
-完整鏈：
-
-```text
-ChatGPT → Gemini → DeepSeek → Claude → ChatGPT → Cursor
-```
-
----
-
-#### D. 最穩但不浪費時間的工作流
-
-日常大多數情況用這個就夠：
-
-```text
-UI 問題：
-Gemini → ChatGPT → Cursor
-
-Code 問題：
-ChatGPT → DeepSeek → ChatGPT → Cursor
-
-大改版：
-ChatGPT → Gemini → Claude → ChatGPT → Cursor
-```
-
----
-
-### 14.6 按鈕該怎麼選
-
-| 你現在想做什麼 | 按哪個 |
-|---|---|
-| 把目前 AI 的回答抓起來 | ① 抓這邊並複製 / Alt+C |
-| 把暫存原文再複製一次 | ② 複製暫存原文 |
-| 給 Gemini 看 UI / 截圖 / layout | ③ 給 Gemini 看 UI |
-| 給 DeepSeek / Claude / Gemini 審 code | ④ 給對方審 Code |
-| 給 ChatGPT 轉 Cursor prompt | ⑤ 給 ChatGPT 轉 Cursor / Alt+V |
-| 變成 Cursor Rule | ⑥ 變成 Cursor Rule |
-| 複製整段對話 | ⑦ 複製整個 Session / Alt+S |
-| 整理成 OneNote / Notion / Markdown 決策筆記 | ⑨ 整理成 OneNote 筆記 / Alt+N |
-| 面板不見或跑掉 | ⑧ 重置面板位置 / Alt+R |
-
----
-
-### 14.7 最後決策規則
-
-| 問題類型 | 優先問誰 |
-|---|---|
-| UI / 截圖 / icon / 對齊 | Gemini |
-| 架構 / 邏輯 / 最終整合 | ChatGPT |
-| 程式碼細節 / bug / import / regression | DeepSeek |
-| 保守複審 / 避免改壞 / 大型改版 | Claude |
-| 最新文件 / API / 套件錯誤 | Perplexity |
-| 真正改檔案 | Cursor |
-
----
-
-### 14.8 最終口訣
-
-```text
-Gemini 看畫面
-ChatGPT 做決策
-DeepSeek 抓 code bug
-Claude 防止亂改
-Cursor 負責落地
-```
-
-操作口訣：
-
-```text
-Alt+C：抓目前這邊
-Alt+V：轉成 Cursor 任務
-Ctrl+V：貼上
-Alt+S：整段 session
-```
-
----
-
-## 15. OneNote / Notion / Markdown 一鍵整理
-
-### 15.1 功能目的
-
-`Alt+N` / `⑨ 整理成 OneNote 筆記` 的目標是：
-
-```text
-把 AI 原始長文 → 整理成可執行決策筆記 → 再貼到 OneNote / Notion / Markdown
-```
-
-不要把 ChatGPT / Gemini 的回覆整段無腦貼進 OneNote。  
-最有效率的做法是先把 AI 回覆壓縮成「可執行筆記」，再進 OneNote。
-
----
-
-### 15.2 使用流程：單段內容整理
+### 使用流程
 
 ```text
 1. 在 ChatGPT / Gemini / DeepSeek / Claude 找到有用內容
@@ -772,22 +355,18 @@ Alt+S：整段 session
 7. 把 ChatGPT 產出的整理後筆記貼到 OneNote / Notion / Markdown
 ```
 
----
-
-### 15.3 使用流程：整段 Session 整理
+### 如果要整理整段對話
 
 ```text
 1. 在目前 AI 頁面按 Alt+S
 2. 切到 ChatGPT
 3. 按 Alt+N
-4. ChatGPT 輸入框 Ctrl+V
+4. Ctrl+V
 5. 送出
 6. 將整理後版本貼到 OneNote / Notion / Markdown
 ```
 
----
-
-### 15.4 OneNote 決策筆記格式
+### OneNote 筆記格式
 
 `Alt+N` 會要求 AI 輸出以下格式：
 
@@ -815,89 +394,252 @@ Alt+S：整段 session
 ## 10. 來源
 ```
 
----
-
-### 15.5 推薦資料分工
+### 推薦用法
 
 ```text
-OneNote：整理想法、決策、待辦、跨專案總覽
-Git / Markdown：專案正式文件、README、bugfix log、commit
-NotebookLM：大量文件查詢、簡報 / PDF / 長文摘要
-本地 Archive：保存 AI 原始輸出、附件、log
+OneNote：放整理後的決策筆記
+Git / Markdown：放專案正式規格、README、bugfix log、commit
+NotebookLM：放大量文件查詢
+本地 Archive：保存 AI 原始輸出
 ```
 
-建議不要只用 OneNote 當最終資料庫：
+### 快捷鍵更新
+
+| 快捷鍵 | 功能 |
+|---|---|
+| Alt+C | 抓目前頁面內容，存暫存區，並複製原文 |
+| Alt+V | 把暫存內容轉成 Cursor Fix prompt，並複製 |
+| Alt+S | 複製目前頁面的整個 session 對話 |
+| Alt+N | 把暫存內容轉成 OneNote / Notion / Markdown 決策筆記整理 prompt |
+| Alt+B | 隱藏 / 顯示面板 |
+| Alt+R | 強制重置面板位置到右下角 |
+
+
+## 14. 使用方式
 
 ```text
-OneNote = 人腦決策筆記
-Git / Markdown = 專案正式規格
-NotebookLM = 大量文件二次查詢
-本地 Archive = AI 原始輸出保存
-```
-
----
-
-### 15.6 OneNote 分區建議
-
-```text
-AI 工作知識庫
-├── 00_Inbox_待整理
-├── 01_專案決策
-├── 02_程式修正原則
-├── 03_股票投資框架
-├── 04_工作簡報素材
-├── 05_影片剪輯
-├── 06_AI工具與Prompt
-├── 07_生活決策
-└── 99_Archive
-```
-
-每一頁命名建議：
-
-```text
-日期_主題_來源
-```
-
-例如：
-
-```text
-2026-05-14_TabsManager資料備份策略_ChatGPT
-2026-05-14_Gemini與ChatGPT資訊整理流程
-2026-05-14_IOWN Rack 老闆報告素材
+1. 安裝 / 覆蓋 Tampermonkey 舊腳本
+2. Ctrl+S 儲存
+3. 回 ChatGPT / Gemini / DeepSeek / Claude
+4. Ctrl+F5
+5. 面板上方選 Project Context
+6. 來源 AI 按 Alt+C 或 Alt+S
+7. 到 ChatGPT 按 Alt+V 或 Alt+N
+8. Ctrl+V 貼上
 ```
 
 ---
 
-### 15.7 專案內容同步到 Git
+## v1.3：面板不出現排查版
 
-專案類內容不要只放 OneNote。
-
-例如：
+v1.3 新增：
 
 ```text
-Tabs Manager Pro
-Media Batch Downloader
-Music Studio
-Media2Txt-Pro
-Torrential Video Pro
-SmartCleanerPro
-TW Quant Cockpit
+1. @run-at document-idle，等頁面載入後再注入
+2. 啟動提示：左下角會短暫顯示 AI Prompt Bridge loaded
+3. Console log：會輸出 [AI Prompt Bridge] injected
+4. Tampermonkey menu command：可從 Tampermonkey 選單手動 Show / Reset Panel
+5. Alt+R 強制重置面板位置
 ```
 
-建議同步到專案內：
+### 正常啟動時應該看到
+
+重新整理 ChatGPT / Gemini 後，左下角會短暫出現：
 
 ```text
-/docs/
-  PROJECT_CONTEXT.md
-  BUGFIX_LOG.md
-  DESIGN_DECISIONS.md
-  PROMPTS.md
-  TEST_LOG.md
-
-README.md
-CHANGELOG.md
+AI Prompt Bridge loaded
 ```
 
-OneNote 放摘要與決策，Git 放正式規格與可追溯文件。
+右下角會出現主面板。
+
+### 如果左下角沒有 AI Prompt Bridge loaded
+
+代表腳本根本沒有注入頁面。請檢查：
+
+```text
+1. Tampermonkey 是否啟用
+2. AI Prompt Bridge 是否啟用
+3. Opera 研發人員模式是否啟用
+4. 目前網址是否是 chatgpt.com / gemini.google.com / claude.ai / chat.deepseek.com
+5. 公司電腦是否被 IT policy 擋 userscript injection
+```
+
+### 如果有 loaded 但沒有面板
+
+按：
+
+```text
+Alt+R
+```
+
+或從 Tampermonkey 圖示選單點：
+
+```text
+Show / Reset AI Prompt Bridge Panel
+```
+
+### Console 檢查
+
+在 ChatGPT / Gemini 頁面按 F12 → Console，搜尋：
+
+```text
+[AI Prompt Bridge] injected
+```
+
+如果有這行，代表腳本已注入，只是面板位置或樣式問題。
 
 ---
+
+## v1.4：Project Context Awareness 專案上下文感知
+
+v1.4 新增「Project Context」下拉選單，用來解決不同專案切換時，必須手動補專案路徑、技術棧、禁忌與測試指令的摩擦。
+
+### 新增功能
+
+```text
+1. 面板頂部新增 Project Context 下拉選單。
+2. 支援 Auto Detect，自動根據目前頁面內容判斷專案。
+3. 支援手動指定專案：Music Studio、Media Downloader、TW Quant、Media2Txt、SmartCleaner、Generic。
+4. Alt+V / Code Review / Visual Review / Make Rule / Alt+N 會自動注入專案背景。
+5. 專案背景包含 Project_Path、Tech_Stack、Critical_Rules、Test_Commands、Docs_Targets。
+```
+
+---
+
+### 目前內建專案
+
+| 專案 | Key | 主要用途 |
+|---|---|---|
+| mp3_auto_edit / Music Studio | mp3 | 音樂整理、Tkinter GUI、歌詞、ReplayGain、音訊處理 |
+| media-batch-downloader | downloader | IG / FB / yt-dlp / Playwright 下載器 |
+| TW-Quant-Cockpit | quant | 台股量化、FinMind、回測、dashboard |
+| Media2Txt-Pro | media2txt | Whisper、ffmpeg、影片轉文字 |
+| SmartCleanerPro | smartcleaner | Windows 清理、BSOD 風險、CrashDump / TEMP 設定 |
+| Generic Project | generic | 未分類專案 |
+| Auto Detect | auto | 自動判斷 |
+
+---
+
+### 使用方式
+
+```text
+1. 在面板最上方選 Project Context
+2. 如果不確定，維持 Auto Detect
+3. 在來源 AI 按 Alt+C 或 Alt+S
+4. 到 ChatGPT 按 Alt+V 或 Alt+N
+5. Ctrl+V 貼上
+6. Prompt 會自動包含專案路徑、技術棧、禁忌、測試指令與 docs 位置
+```
+
+---
+
+### Alt+V 輸出會自動包含
+
+```text
+Project_Mode:
+Project_Name:
+Project_Path:
+Tech_Stack:
+Critical_Rules:
+Test_Commands:
+Docs_Targets:
+Source:
+Captured_At:
+Source_URL:
+```
+
+這樣 ChatGPT / Cursor / DeepSeek / Claude 不需要你每次手動補：
+
+```text
+這是哪個專案
+在哪個路徑
+用什麼技術
+哪些功能不能改壞
+要怎麼測試
+README / BUGFIX_LOG 要同步哪裡
+```
+
+---
+
+### Music Studio 範例
+
+選擇：
+
+```text
+mp3_auto_edit / Music Studio
+```
+
+Alt+V 會自動帶入：
+
+```text
+Project_Path: D:/code/Claude/mp3_auto_edit/music_manager_GUI
+Tech_Stack: Python 3.x, Tkinter / GUI, Mutagen, Pydub, ffmpeg, SQLite, Multithreading
+Critical_Rules:
+- 必須嚴格處理 Windows 中文路徑、特殊字元、長路徑與非英文檔名。
+- 所有耗時音訊解碼、掃描、ReplayGain、歌詞搜尋、特徵分析都不可阻塞 Tkinter 主執行緒。
+- GUI 元件更新必須回到主執行緒，不可由 worker thread 直接改 UI。
+- 不可破壞既有音樂庫掃描、播放、歌詞、ReplayGain、整理、匯出功能。
+```
+
+---
+
+### Media Downloader 範例
+
+選擇：
+
+```text
+media-batch-downloader
+```
+
+Alt+V 會自動帶入：
+
+```text
+Project_Path: D:/code/Claude/media-batch-downloader
+Critical_Rules:
+- 不影響現有正常下載功能，尤其 Instagram / Facebook 已成功流程不可改壞。
+- Facebook 多圖貼文不可少抓；未達 expected count 不可標 SUCCESS。
+- cookies / Playwright / yt-dlp fallback 行為不可互相覆蓋有效結果。
+```
+
+---
+
+### TW Quant 範例
+
+選擇：
+
+```text
+TW-Quant-Cockpit
+```
+
+Alt+V 會自動帶入：
+
+```text
+Critical_Rules:
+- 嚴格防止時間序列 look-ahead bias，不可偷看未來資料。
+- 回測與特徵工程必須清楚區分 train / validation / test / walk-forward。
+- 不能把 mock / demo 結果誤標成真實績效。
+```
+
+---
+
+### 建議操作
+
+```text
+小問題：Auto Detect 即可
+切換專案：手動選 Project Context
+大改版：手動選專案，再跑 ChatGPT → Gemini → DeepSeek → Claude → ChatGPT → Cursor
+歸檔：Alt+N 會自動帶專案 docs 同步位置
+```
+
+---
+
+## v1.4 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "feat: add project-aware prompt presets" -m "- Add Project Context selector with Auto Detect and manual project presets.
+- Add project-specific path, tech stack, critical rules, test commands, and docs targets.
+- Inject project context into Cursor Fix, Code Review, Visual Review, Make Rule, and OneNote prompts.
+- Add presets for Music Studio, media-batch-downloader, TW-Quant-Cockpit, Media2Txt-Pro, SmartCleanerPro, and Generic project workflows.
+- Update README with project-aware workflow and usage examples."
+```

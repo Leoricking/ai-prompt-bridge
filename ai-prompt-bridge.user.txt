@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         AI Prompt Bridge
 // @namespace    https://ai-prompt-bridge.local/ai-prompt-bridge
-// @version      1.2.0
-// @description  Cross-AI prompt bridge for ChatGPT, Gemini, Claude, DeepSeek, Qwen, Perplexity and Cursor workflows. Adds OneNote / Markdown decision-note prompt generation.
+// @version      1.4.0
+// @description  Cross-AI prompt bridge for ChatGPT, Gemini, Claude, DeepSeek, Qwen, Perplexity and Cursor workflows. Adds project presets, smart project detection, and project-aware prompts.
 // @author       Rossi
 // @match        https://chatgpt.com/*
 // @match        https://chat.openai.com/*
@@ -14,26 +14,201 @@
 // @match        https://qwenlm.github.io/*
 // @match        https://www.cursor.com/*
 // @match        https://cursor.com/*
+// @include      https://*.chatgpt.com/*
+// @include      https://*.gemini.google.com/*
+// @include      https://*.claude.ai/*
+// @include      https://*.deepseek.com/*
+// @include      https://*.perplexity.ai/*
+// @include      https://*.qwen.ai/*
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_setClipboard
+// @grant        GM_registerMenuCommand
+// @run-at       document-idle
 // ==/UserScript==
 
 (function () {
     "use strict";
 
-    const STORAGE_KEY = "ai_prompt_bridge_payload_v12";
-    const PANEL_POS_KEY = "ai_prompt_bridge_panel_position_v12";
-    const PANEL_ID = "ai-prompt-bridge-panel-v12";
-    const BUBBLE_ID = "ai-prompt-bridge-restore-bubble-v12";
-    const COLLAPSED_KEY = "ai_prompt_bridge_collapsed_v12";
-    const HIDDEN_KEY = "ai_prompt_bridge_hidden_v12";
+    const AI_PROMPT_BRIDGE_VERSION = "1.4.0";
+    console.log("[AI Prompt Bridge] injected", AI_PROMPT_BRIDGE_VERSION, location.href);
 
-    const PROJECT_PRESETS = {
-        mp3: "C:/Users/Rossi/Documents/Claude/mp3_auto_edit/music_manager_GUI",
-        downloader: "C:/Users/Rossi/Documents/Claude/media-batch-downloader",
-        quant: "C:/Users/Rossi/Documents/Claude/TW-Quant-Cockpit"
+    function showStartupProbe() {
+        try {
+            const probeId = "ai-prompt-bridge-startup-probe";
+            if (document.getElementById(probeId)) return;
+            const probe = document.createElement("div");
+            probe.id = probeId;
+            probe.textContent = "AI Prompt Bridge loaded";
+            probe.style.position = "fixed";
+            probe.style.left = "12px";
+            probe.style.bottom = "12px";
+            probe.style.zIndex = "2147483647";
+            probe.style.background = "#111827";
+            probe.style.color = "#fff";
+            probe.style.padding = "8px 12px";
+            probe.style.borderRadius = "10px";
+            probe.style.fontSize = "12px";
+            probe.style.fontFamily = "Arial, sans-serif";
+            probe.style.boxShadow = "0 8px 24px rgba(0,0,0,.25)";
+            (document.body || document.documentElement).appendChild(probe);
+            setTimeout(() => probe.remove(), 2500);
+        } catch (error) {
+            console.warn("[AI Prompt Bridge] startup probe failed", error);
+        }
+    }
+
+    function onReady(callback) {
+        if (document.readyState === "loading") {
+            document.addEventListener("DOMContentLoaded", callback, { once: true });
+        } else {
+            callback();
+        }
+    }
+
+    const STORAGE_KEY = "ai_prompt_bridge_payload_v14";
+    const PANEL_POS_KEY = "ai_prompt_bridge_panel_position_v14";
+    const PANEL_ID = "ai-prompt-bridge-panel-v14";
+    const BUBBLE_ID = "ai-prompt-bridge-restore-bubble-v14";
+    const COLLAPSED_KEY = "ai_prompt_bridge_collapsed_v14";
+    const HIDDEN_KEY = "ai_prompt_bridge_hidden_v14";
+    const PROJECT_KEY = "ai_prompt_bridge_project_key_v14";
+
+    const PROJECTS = {
+        auto: {
+            name: "Auto Detect",
+            path: "",
+            techStack: "依頁面內容自動判斷專案。",
+            goldenRules: "若無法判斷專案，使用通用最高原則：不可破壞既有功能、只做最小修改、完整檔案輸出。",
+            testCommands: "",
+            docsTargets: "README.md / docs / .cursor/rules",
+            keywords: []
+        },
+        mp3: {
+            name: "mp3_auto_edit / Music Studio",
+            path: "D:/code/Claude/mp3_auto_edit/music_manager_GUI",
+            techStack: "Python 3.x, Tkinter / GUI, Mutagen, Pydub, ffmpeg, SQLite, Multithreading",
+            goldenRules: [
+                "必須嚴格處理 Windows 中文路徑、特殊字元、長路徑與非英文檔名。",
+                "所有耗時音訊解碼、掃描、ReplayGain、歌詞搜尋、特徵分析都不可阻塞 Tkinter 主執行緒。",
+                "GUI 元件更新必須回到主執行緒，不可由 worker thread 直接改 UI。",
+                "不可破壞既有音樂庫掃描、播放、歌詞、ReplayGain、整理、匯出功能。",
+                "修 progress / ETA / cancel / status bar 時必須保留取消、進度、耗時、預估時間與狀態列。",
+                "必須避免壞檔、重複檔、collision、repair queue 造成資料遺失。"
+            ].join("\n"),
+            testCommands: [
+                "python app.py",
+                "python -m pytest",
+                "手動測試：掃描 D:/Music、重建索引、播放、歌詞、ReplayGain、取消長任務、中文檔名"
+            ].join("\n"),
+            docsTargets: "README.md / docs/BUGFIX_LOG.md / docs/DESIGN_DECISIONS.md / .cursor/rules/python-gui-threading.mdc",
+            keywords: ["mp3", "music studio", "music_manager", "lyrics", "replaygain", "mutagen", "pydub", "tkinter", "音樂", "歌詞"]
+        },
+        downloader: {
+            name: "media-batch-downloader",
+            path: "D:/code/Claude/media-batch-downloader",
+            techStack: "Python, Tkinter GUI, yt-dlp, Playwright, requests, cookies, batch downloader, file I/O",
+            goldenRules: [
+                "不影響現有正常下載功能，尤其 Instagram / Facebook 已成功流程不可改壞。",
+                "Facebook 多圖貼文不可少抓；未達 expected count 不可標 SUCCESS。",
+                "下載失敗必須保留可重試狀態、明確錯誤原因與 log。",
+                "嚴格處理 Windows 檔名限制與路徑限制，過濾冒號、星號、問號、雙引號、角括號、直線等 Windows 禁用字元。",
+                "不可提供簡化版、閹割版或回退版；必須基於目前完整檔案做最小修改。",
+                "cookies / Playwright / yt-dlp fallback 行為不可互相覆蓋有效結果。"
+            ].join("\n"),
+            testCommands: [
+                "python main.py",
+                "python -m pytest",
+                "手動測試：Instagram 圖文、Instagram Reel、Facebook 多圖、Facebook Reel、失敗 retry、cookies 更新"
+            ].join("\n"),
+            docsTargets: "README.md / docs/BUGFIX_LOG.md / docs/DOWNLOAD_FLOW.md / .cursor/rules/downloader-project.mdc",
+            keywords: ["downloader", "instagram", "facebook", "yt-dlp", "playwright", "cookies", "download", "reel", "多圖"]
+        },
+        quant: {
+            name: "TW-Quant-Cockpit",
+            path: "D:/code/Claude/tw_quant_cockpit",
+            techStack: "Python, Pandas, FinMind, Shioaji, SQLite / Parquet, backtesting, screener, GUI dashboard",
+            goldenRules: [
+                "嚴格防止時間序列 look-ahead bias，不可偷看未來資料。",
+                "回測與特徵工程必須清楚區分 train / validation / test / walk-forward。",
+                "DataFrame 大量運算優先向量化，避免慢速 for loop。",
+                "交易 API / 資料 API 必須處理 rate limit、timeout、斷線與重試。",
+                "不能把 mock / demo 結果誤標成真實績效。",
+                "任何策略輸出都要標明資料不足、風險、假設與限制。"
+            ].join("\n"),
+            testCommands: [
+                "python main.py cockpit",
+                "python main.py pipeline",
+                "python -m pytest",
+                "手動測試：下載資料、features、screener、backtest、dashboard"
+            ].join("\n"),
+            docsTargets: "README.md / docs/STRATEGY_LOG.md / docs/BACKTEST_NOTES.md / .cursor/rules/quant-project.mdc",
+            keywords: ["quant", "tw quant", "台股", "stock", "trading", "backtest", "finmind", "shioaji", "pandas"]
+        },
+        media2txt: {
+            name: "Media2Txt-Pro",
+            path: "D:/code/Claude/Media2Txt-Pro-Community",
+            techStack: "Python, PyQt / Qt, faster-whisper, ffmpeg, CUDA / CPU fallback, local offline model",
+            goldenRules: [
+                "本地 offline mode 不可被改壞，WHISPER_MODEL_DIR 與 MEDIA2TXT_OFFLINE 必須保留。",
+                "GPU / CPU fallback 必須穩定，CUDA 失敗時不可直接中斷整個 app。",
+                "長時間轉檔不可阻塞 GUI；進度、取消、ETA、log 必須可用。",
+                "ffmpeg 路徑偵測需支援 JDownloader tools 與手動設定。",
+                "不可刪除現有轉檔、摘要、字幕、模型設定與啟動檢查功能。"
+            ].join("\n"),
+            testCommands: [
+                "python main.py",
+                "run.bat",
+                "手動測試：短影片、長影片、CPU fallback、GPU 模式、ffmpeg 偵測、清除暫存"
+            ].join("\n"),
+            docsTargets: "README.md / docs/RUNTIME.md / docs/BUGFIX_LOG.md / .cursor/rules/media2txt-project.mdc",
+            keywords: ["media2txt", "whisper", "faster-whisper", "ffmpeg", "subtitle", "轉文字", "轉檔"]
+        },
+        smartcleaner: {
+            name: "SmartCleanerPro",
+            path: "D:/code/Claude/SmartCleanerPro",
+            techStack: "Python, Tkinter / Windows registry, system cleanup, BSOD risk analysis, crash dump config",
+            goldenRules: [
+                "任何系統設定修改必須可回復，不能破壞 Windows 正常啟動與網路。",
+                "涉及 registry、TEMP、CrashDump、pagefile 時必須明確列出風險與備份方式。",
+                "不可自動刪除使用者重要資料；清理功能必須區分安全 / 風險項目。",
+                "BSOD 分析只能做風險提示，不能假裝已百分百診斷硬體故障。"
+            ].join("\n"),
+            testCommands: [
+                "python main.py",
+                "python -m pytest",
+                "手動測試：風險分析、IO diversion、清理預覽、取消操作"
+            ].join("\n"),
+            docsTargets: "README.md / docs/STABILITY.md / docs/BUGFIX_LOG.md / .cursor/rules/smartcleaner-project.mdc",
+            keywords: ["smartcleaner", "bsod", "crashdump", "temp", "pagefile", "registry", "穩定性"]
+        },
+        generic: {
+            name: "Generic Project",
+            path: "",
+            techStack: "未指定。請根據使用者提供的專案內容、檔案與 log 判斷。",
+            goldenRules: [
+                "原本可用功能不可被改壞。",
+                "只針對指定異常做最小範圍修正。",
+                "不可提供簡化版、閹割版、回退版。",
+                "若提供程式碼，必須提供完整檔案，可直接覆蓋。",
+                "必須列出測試方式、風險與可能 regression。"
+            ].join("\n"),
+            testCommands: "依專案 README / package / requirements / pyproject / 測試檔判斷。",
+            docsTargets: "README.md / docs / CHANGELOG.md / .cursor/rules",
+            keywords: []
+        }
     };
+
+    let selectedProjectKey = "auto";
+    try {
+        const storedProject = GM_getValue(PROJECT_KEY, "auto");
+        if (typeof storedProject === "string" && PROJECTS[storedProject]) {
+            selectedProjectKey = storedProject;
+        }
+    } catch (error) {
+        selectedProjectKey = "auto";
+    }
+
 
     function nowText() {
         const d = new Date();
@@ -418,52 +593,109 @@
         toast(message);
     }
 
-    function guessProjectPath() {
-        const title = safeText(document.title).toLowerCase();
-        const body = safeText(document.body.innerText).toLowerCase().slice(0, 6000);
+    function getProjectTextSource(payload = null) {
+        return [
+            safeText(document.title),
+            safeText(document.body?.innerText).slice(0, 9000),
+            safeText(payload?.content).slice(0, 12000)
+        ].join(" ").toLowerCase();
+    }
 
-        if (
-            title.includes("mp3") ||
-            body.includes("music studio") ||
-            body.includes("music") ||
-            body.includes("lyrics") ||
-            body.includes("replaygain") ||
-            body.includes("queue")
-        ) {
-            return PROJECT_PRESETS.mp3;
+    function detectCurrentProjectKey(payload = null) {
+        const text = getProjectTextSource(payload);
+
+        for (const [key, project] of Object.entries(PROJECTS)) {
+            if (key === "auto" || key === "generic") continue;
+            if ((project.keywords || []).some((keyword) => text.includes(String(keyword).toLowerCase()))) {
+                return key;
+            }
         }
 
-        if (
-            title.includes("downloader") ||
-            body.includes("instagram") ||
-            body.includes("facebook") ||
-            body.includes("yt-dlp") ||
-            body.includes("downloader")
-        ) {
-            return PROJECT_PRESETS.downloader;
-        }
+        return "generic";
+    }
 
-        if (
-            title.includes("quant") ||
-            body.includes("台股") ||
-            body.includes("stock") ||
-            body.includes("trading")
-        ) {
-            return PROJECT_PRESETS.quant;
+    function getActiveProjectKey(payload = null) {
+        if (selectedProjectKey && selectedProjectKey !== "auto" && PROJECTS[selectedProjectKey]) {
+            return selectedProjectKey;
         }
+        return detectCurrentProjectKey(payload);
+    }
 
-        return "";
+    function getActiveProject(payload = null) {
+        const key = getActiveProjectKey(payload);
+        return PROJECTS[key] || PROJECTS.generic;
+    }
+
+    function buildProjectContext(payload = null) {
+        const key = getActiveProjectKey(payload);
+        const project = getActiveProject(payload);
+        const mode = selectedProjectKey === "auto" ? `auto-detect:${key}` : `manual:${key}`;
+
+        return [
+            `Project_Mode: ${mode}`,
+            `Project_Name: ${project.name}`,
+            project.path ? `Project_Path: ${project.path}` : "",
+            `Tech_Stack: ${project.techStack}`,
+            `Critical_Rules:\n${project.goldenRules}`,
+            project.testCommands ? `Test_Commands:\n${project.testCommands}` : "",
+            project.docsTargets ? `Docs_Targets: ${project.docsTargets}` : ""
+        ].filter(Boolean).join("\n");
     }
 
     function makeHeader(payload, projectPathOverride = "") {
-        const projectPath = projectPathOverride || guessProjectPath();
+        const projectContext = buildProjectContext(payload);
+        const overrideLine = projectPathOverride ? `Project_Path_Override: ${projectPathOverride}` : "";
 
         return [
             `Source: ${payload?.source || getSiteName()}`,
             `Captured_At: ${payload?.createdAt || nowText()}`,
-            projectPath ? `Project_Path: ${projectPath}` : "",
-            payload?.sourceUrl ? `Source_URL: ${payload.sourceUrl}` : ""
+            payload?.sourceUrl ? `Source_URL: ${payload.sourceUrl}` : "",
+            projectContext,
+            overrideLine
         ].filter(Boolean).join("\n");
+    }
+
+    function createProjectSelector() {
+        const wrapper = document.createElement("div");
+        wrapper.style.display = "flex";
+        wrapper.style.flexDirection = "column";
+        wrapper.style.gap = "4px";
+        wrapper.style.marginBottom = "4px";
+
+        const label = document.createElement("div");
+        label.textContent = "Project Context";
+        label.style.fontSize = "11px";
+        label.style.color = "#d1d5db";
+        label.style.fontWeight = "700";
+
+        const select = document.createElement("select");
+        select.style.width = "100%";
+        select.style.padding = "6px 8px";
+        select.style.borderRadius = "8px";
+        select.style.border = "1px solid #374151";
+        select.style.background = "#030712";
+        select.style.color = "#fff";
+        select.style.fontSize = "12px";
+
+        Object.entries(PROJECTS).forEach(([key, project]) => {
+            const option = document.createElement("option");
+            option.value = key;
+            option.textContent = key === "auto" ? "Auto Detect" : project.name;
+            select.appendChild(option);
+        });
+
+        select.value = selectedProjectKey || "auto";
+
+        select.addEventListener("change", async () => {
+            selectedProjectKey = select.value;
+            await gmSet(PROJECT_KEY, selectedProjectKey);
+            toast(`Project: ${PROJECTS[selectedProjectKey]?.name || selectedProjectKey}`);
+            await updateStatus();
+        });
+
+        wrapper.appendChild(label);
+        wrapper.appendChild(select);
+        return wrapper;
     }
 
     function buildVisualReview(payload) {
@@ -475,6 +707,7 @@
             "你是 UI / UX 視覺檢查專家。",
             "",
             "請只針對 UI / 截圖 / 視覺問題分析，不要直接重寫程式碼。",
+            "請同時參考上方 Project_Context 的技術棧、Critical_Rules 與 Docs_Targets。",
             "",
             "請輸出：",
             "1. 哪個 icon / label / spacing / font / alignment 有問題",
@@ -498,7 +731,7 @@
             "",
             "你是嚴格的 code reviewer。",
             "",
-            "請針對以下內容做攻擊性 review：",
+            "請針對以下內容做攻擊性 review，並套用上方 Project_Context 的專案禁忌與測試指令：",
             "1. 找出 bug / regression 風險",
             "2. 找出 thread-safety / encoding / Windows path / file I/O 風險",
             "3. 不要重寫整個專案",
@@ -518,7 +751,7 @@
         return [
             makeHeader(payload),
             "",
-            "請根據以下多模型結論修正目前 Cursor 專案。",
+            "請根據以下多模型結論修正目前 Cursor 專案。請務必套用上方 Project_Context：Project_Path、Tech_Stack、Critical_Rules、Test_Commands、Docs_Targets。",
             "",
             "最高原則：",
             "1. 原本可用功能不可被改壞。",
@@ -547,7 +780,7 @@
         return [
             makeHeader(payload),
             "",
-            "請把以下多模型討論結論整理成 Cursor Project Rule。",
+            "請把以下多模型討論結論整理成 Cursor Project Rule，並納入上方 Project_Context 的專案路徑、技術棧、禁忌與測試方式。",
             "",
             "輸出格式必須適合存成 .cursor/rules/*.mdc。",
             "",
@@ -577,7 +810,7 @@
         return [
             makeHeader(payload),
             "",
-            "請把以下內容整理成「可直接貼到 OneNote / Notion / Markdown」的決策筆記。",
+            "請把以下內容整理成「可直接貼到 OneNote / Notion / Markdown」的決策筆記。請同時納入上方 Project_Context，尤其是專案路徑、不可破壞原則、測試指令與 docs 同步位置。",
             "",
             "整理原則：",
             "1. 不要保留廢話。",
@@ -739,7 +972,8 @@
         const collapsed = await gmGet(COLLAPSED_KEY, false);
         const ready = await hasPayload();
         const status = ready ? "🟢" : "⚪";
-        title.textContent = collapsed ? `AI Prompt ${status} △` : `AI Prompt Bridge ${status} ▽`;
+        const projectLabel = selectedProjectKey && selectedProjectKey !== "auto" ? ` [${selectedProjectKey}]` : " [auto]";
+        title.textContent = collapsed ? `AI Prompt ${status}${projectLabel} △` : `AI Prompt Bridge ${status}${projectLabel} ▽`;
     }
 
     async function setCollapsed(panel, content, collapsed) {
@@ -779,7 +1013,7 @@
             await showPanelAtDefaultPosition();
         });
 
-        document.body.appendChild(bubble);
+        (document.body || document.documentElement).appendChild(bubble);
         return bubble;
     }
 
@@ -941,6 +1175,7 @@
             await setCollapsed(panel, content, nextCollapsed);
         });
 
+        content.appendChild(createProjectSelector());
         content.appendChild(createButton("① 抓這邊並複製 Alt+C", captureCurrentAnswer, "#2563eb"));
         content.appendChild(createButton("② 複製暫存原文", copyRawPayload, "#4b5563"));
         content.appendChild(createButton("③ 給 Gemini 看 UI", () => copyPrompt(buildVisualReview, "已複製 Visual Review Prompt"), "#374151"));
@@ -972,7 +1207,7 @@
 
         panel.appendChild(title);
         panel.appendChild(content);
-        document.body.appendChild(panel);
+        (document.body || document.documentElement).appendChild(panel);
 
         await setCollapsed(panel, content, collapsed);
         makeDraggable(panel, title);
@@ -992,7 +1227,7 @@
         el.style.borderRadius = "10px";
         el.style.fontSize = "13px";
         el.style.boxShadow = "0 8px 24px rgba(0,0,0,.25)";
-        document.body.appendChild(el);
+        (document.body || document.documentElement).appendChild(el);
         setTimeout(() => el.remove(), 1700);
     }
 
@@ -1048,5 +1283,19 @@
         await updateStatus();
     }, 3000);
 
-    ensurePanel();
+    if (typeof GM_registerMenuCommand === "function") {
+        GM_registerMenuCommand("Show / Reset AI Prompt Bridge Panel", async () => {
+            await showPanelAtDefaultPosition();
+        });
+        GM_registerMenuCommand("Copy Full Session", async () => {
+            await captureFullSession();
+        });
+    }
+
+    onReady(async () => {
+        showStartupProbe();
+        await ensurePanel();
+        setTimeout(ensurePanel, 800);
+        setTimeout(ensurePanel, 2000);
+    });
 })();
