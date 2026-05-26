@@ -12,7 +12,6 @@ AI Prompt Bridge
 
 ---
 
-<<<<<<< HEAD
 ## 0. 安裝步驟
 
 安裝 Tampermonkey
@@ -32,8 +31,6 @@ AI Prompt Bridge
 介面
 <img width="1848" height="835" alt="3 介面" src="https://github.com/user-attachments/assets/ec509b8e-081a-4bdf-9055-7b9f4b5884b6" />
 
-=======
->>>>>>> b486c85 (feat: add project-aware prompt presets)
 ## 1. 專案檔案
 
 建議 Git repo 結構：
