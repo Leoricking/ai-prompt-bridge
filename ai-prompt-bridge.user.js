@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         AI Prompt Bridge
 // @namespace    https://ai-prompt-bridge.local/ai-prompt-bridge
-// @version      1.7.0
-// @description  Cross-AI prompt bridge for ChatGPT, Gemini, Claude, DeepSeek, Qwen, Perplexity and Cursor workflows. Adds drag-anywhere panel movement while preserving button and input interactions.
+// @version      1.8.0
+// @description  Cross-AI prompt bridge for ChatGPT, Gemini, Claude, DeepSeek, Qwen, Perplexity and Cursor workflows. Public-safe build: removes private project presets and uses generic project context templates.
 // @author       Rossi
 // @match        https://chatgpt.com/*
 // @match        https://chat.openai.com/*
@@ -30,7 +30,7 @@
 (function () {
     "use strict";
 
-    const AI_PROMPT_BRIDGE_VERSION = "1.7.0";
+    const AI_PROMPT_BRIDGE_VERSION = "1.8.0";
     console.log("[AI Prompt Bridge] injected", AI_PROMPT_BRIDGE_VERSION, location.href);
 
     function showStartupProbe() {
@@ -66,121 +66,23 @@
         }
     }
 
-    const STORAGE_KEY = "ai_prompt_bridge_payload_v17";
-    const PANEL_POS_KEY = "ai_prompt_bridge_panel_position_v17";
-    const PANEL_ID = "ai-prompt-bridge-panel-v17";
-    const BUBBLE_ID = "ai-prompt-bridge-restore-bubble-v17";
-    const COLLAPSED_KEY = "ai_prompt_bridge_collapsed_v17";
-    const HIDDEN_KEY = "ai_prompt_bridge_hidden_v17";
-    const PROJECT_KEY = "ai_prompt_bridge_project_key_v17";
+    const STORAGE_KEY = "ai_prompt_bridge_payload_v18";
+    const PANEL_POS_KEY = "ai_prompt_bridge_panel_position_v18";
+    const PANEL_ID = "ai-prompt-bridge-panel-v18";
+    const BUBBLE_ID = "ai-prompt-bridge-restore-bubble-v18";
+    const COLLAPSED_KEY = "ai_prompt_bridge_collapsed_v18";
+    const HIDDEN_KEY = "ai_prompt_bridge_hidden_v18";
+    const PROJECT_KEY = "ai_prompt_bridge_project_key_v18";
 
     const PROJECTS = {
         auto: {
             name: "Auto Detect",
             path: "",
-            techStack: "依頁面內容自動判斷專案。",
+            techStack: "依頁面內容自動判斷專案類型。",
             goldenRules: "若無法判斷專案，使用通用最高原則：不可破壞既有功能、只做最小修改、完整檔案輸出。",
             testCommands: "",
-            docsTargets: "README.md / docs / .cursor/rules",
+            docsTargets: "README.md / docs / CHANGELOG.md / .cursor/rules",
             keywords: []
-        },
-        mp3: {
-            name: "mp3_auto_edit / Music Studio",
-            path: "D:/code/Claude/mp3_auto_edit/music_manager_GUI",
-            techStack: "Python 3.x, Tkinter / GUI, Mutagen, Pydub, ffmpeg, SQLite, Multithreading",
-            goldenRules: [
-                "必須嚴格處理 Windows 中文路徑、特殊字元、長路徑與非英文檔名。",
-                "所有耗時音訊解碼、掃描、ReplayGain、歌詞搜尋、特徵分析都不可阻塞 Tkinter 主執行緒。",
-                "GUI 元件更新必須回到主執行緒，不可由 worker thread 直接改 UI。",
-                "不可破壞既有音樂庫掃描、播放、歌詞、ReplayGain、整理、匯出功能。",
-                "修 progress / ETA / cancel / status bar 時必須保留取消、進度、耗時、預估時間與狀態列。",
-                "必須避免壞檔、重複檔、collision、repair queue 造成資料遺失。"
-            ].join("\n"),
-            testCommands: [
-                "python app.py",
-                "python -m pytest",
-                "手動測試：掃描 D:/Music、重建索引、播放、歌詞、ReplayGain、取消長任務、中文檔名"
-            ].join("\n"),
-            docsTargets: "README.md / docs/BUGFIX_LOG.md / docs/DESIGN_DECISIONS.md / .cursor/rules/python-gui-threading.mdc",
-            keywords: ["mp3", "music studio", "music_manager", "lyrics", "replaygain", "mutagen", "pydub", "tkinter", "音樂", "歌詞"]
-        },
-        downloader: {
-            name: "media-batch-downloader",
-            path: "D:/code/Claude/media-batch-downloader",
-            techStack: "Python, Tkinter GUI, yt-dlp, Playwright, requests, cookies, batch downloader, file I/O",
-            goldenRules: [
-                "不影響現有正常下載功能，尤其 Instagram / Facebook 已成功流程不可改壞。",
-                "Facebook 多圖貼文不可少抓；未達 expected count 不可標 SUCCESS。",
-                "下載失敗必須保留可重試狀態、明確錯誤原因與 log。",
-                "嚴格處理 Windows 檔名限制與路徑限制，過濾冒號、星號、問號、雙引號、角括號、直線等 Windows 禁用字元。",
-                "不可提供簡化版、閹割版或回退版；必須基於目前完整檔案做最小修改。",
-                "cookies / Playwright / yt-dlp fallback 行為不可互相覆蓋有效結果。"
-            ].join("\n"),
-            testCommands: [
-                "python main.py",
-                "python -m pytest",
-                "手動測試：Instagram 圖文、Instagram Reel、Facebook 多圖、Facebook Reel、失敗 retry、cookies 更新"
-            ].join("\n"),
-            docsTargets: "README.md / docs/BUGFIX_LOG.md / docs/DOWNLOAD_FLOW.md / .cursor/rules/downloader-project.mdc",
-            keywords: ["downloader", "instagram", "facebook", "yt-dlp", "playwright", "cookies", "download", "reel", "多圖"]
-        },
-        quant: {
-            name: "TW-Quant-Cockpit",
-            path: "D:/code/Claude/tw_quant_cockpit",
-            techStack: "Python, Pandas, FinMind, Shioaji, SQLite / Parquet, backtesting, screener, GUI dashboard",
-            goldenRules: [
-                "嚴格防止時間序列 look-ahead bias，不可偷看未來資料。",
-                "回測與特徵工程必須清楚區分 train / validation / test / walk-forward。",
-                "DataFrame 大量運算優先向量化，避免慢速 for loop。",
-                "交易 API / 資料 API 必須處理 rate limit、timeout、斷線與重試。",
-                "不能把 mock / demo 結果誤標成真實績效。",
-                "任何策略輸出都要標明資料不足、風險、假設與限制。"
-            ].join("\n"),
-            testCommands: [
-                "python main.py cockpit",
-                "python main.py pipeline",
-                "python -m pytest",
-                "手動測試：下載資料、features、screener、backtest、dashboard"
-            ].join("\n"),
-            docsTargets: "README.md / docs/STRATEGY_LOG.md / docs/BACKTEST_NOTES.md / .cursor/rules/quant-project.mdc",
-            keywords: ["quant", "tw quant", "台股", "stock", "trading", "backtest", "finmind", "shioaji", "pandas"]
-        },
-        media2txt: {
-            name: "Media2Txt-Pro",
-            path: "D:/code/Claude/Media2Txt-Pro-Community",
-            techStack: "Python, PyQt / Qt, faster-whisper, ffmpeg, CUDA / CPU fallback, local offline model",
-            goldenRules: [
-                "本地 offline mode 不可被改壞，WHISPER_MODEL_DIR 與 MEDIA2TXT_OFFLINE 必須保留。",
-                "GPU / CPU fallback 必須穩定，CUDA 失敗時不可直接中斷整個 app。",
-                "長時間轉檔不可阻塞 GUI；進度、取消、ETA、log 必須可用。",
-                "ffmpeg 路徑偵測需支援 JDownloader tools 與手動設定。",
-                "不可刪除現有轉檔、摘要、字幕、模型設定與啟動檢查功能。"
-            ].join("\n"),
-            testCommands: [
-                "python main.py",
-                "run.bat",
-                "手動測試：短影片、長影片、CPU fallback、GPU 模式、ffmpeg 偵測、清除暫存"
-            ].join("\n"),
-            docsTargets: "README.md / docs/RUNTIME.md / docs/BUGFIX_LOG.md / .cursor/rules/media2txt-project.mdc",
-            keywords: ["media2txt", "whisper", "faster-whisper", "ffmpeg", "subtitle", "轉文字", "轉檔"]
-        },
-        smartcleaner: {
-            name: "SmartCleanerPro",
-            path: "D:/code/Claude/SmartCleanerPro",
-            techStack: "Python, Tkinter / Windows registry, system cleanup, BSOD risk analysis, crash dump config",
-            goldenRules: [
-                "任何系統設定修改必須可回復，不能破壞 Windows 正常啟動與網路。",
-                "涉及 registry、TEMP、CrashDump、pagefile 時必須明確列出風險與備份方式。",
-                "不可自動刪除使用者重要資料；清理功能必須區分安全 / 風險項目。",
-                "BSOD 分析只能做風險提示，不能假裝已百分百診斷硬體故障。"
-            ].join("\n"),
-            testCommands: [
-                "python main.py",
-                "python -m pytest",
-                "手動測試：風險分析、IO diversion、清理預覽、取消操作"
-            ].join("\n"),
-            docsTargets: "README.md / docs/STABILITY.md / docs/BUGFIX_LOG.md / .cursor/rules/smartcleaner-project.mdc",
-            keywords: ["smartcleaner", "bsod", "crashdump", "temp", "pagefile", "registry", "穩定性"]
         },
         generic: {
             name: "Generic Project",
@@ -196,6 +98,99 @@
             testCommands: "依專案 README / package / requirements / pyproject / 測試檔判斷。",
             docsTargets: "README.md / docs / CHANGELOG.md / .cursor/rules",
             keywords: []
+        },
+        python_gui: {
+            name: "Python GUI App",
+            path: "",
+            techStack: "Python, Tkinter / PyQt / GUI, background workers, file I/O",
+            goldenRules: [
+                "不可阻塞 GUI 主執行緒，耗時任務必須放到 worker / thread / async flow。",
+                "GUI 元件更新必須回到主執行緒或框架允許的安全更新方式。",
+                "必須處理 Windows / macOS / Linux 路徑差異、中文路徑、特殊字元與長路徑。",
+                "修 progress / cancel / ETA / status bar 時，不可破壞既有任務流程。",
+                "不可刪除既有功能，不可用簡化版取代完整檔案。"
+            ].join("\n"),
+            testCommands: [
+                "python main.py",
+                "python -m pytest",
+                "手動測試：啟動 GUI、長任務、取消、進度、中文檔名、錯誤流程"
+            ].join("\n"),
+            docsTargets: "README.md / docs/BUGFIX_LOG.md / docs/DESIGN_DECISIONS.md / .cursor/rules/python-gui.mdc",
+            keywords: ["python", "tkinter", "pyqt", "gui", "thread", "progress", "cancel", "eta", "視窗", "介面"]
+        },
+        browser_extension: {
+            name: "Browser Extension / Userscript",
+            path: "",
+            techStack: "JavaScript, Tampermonkey / Chrome Extension, DOM, Clipboard API, browser permissions",
+            goldenRules: [
+                "不可破壞既有快捷鍵、剪貼簿與面板功能。",
+                "所有 selector 必須有 fallback，避免單一網站 DOM 改版造成整體失效。",
+                "涉及 clipboard / file / network / permissions 時，必須說明瀏覽器限制與降級方案。",
+                "避免把 private project names、local paths、API keys、tokens 寫進公開腳本。",
+                "修改後必須通過 JavaScript syntax check。"
+            ].join("\n"),
+            testCommands: [
+                "node --check ai-prompt-bridge.user.js",
+                "手動測試：ChatGPT、Gemini、DeepSeek、Claude、複製、貼上、拖曳、重置面板"
+            ].join("\n"),
+            docsTargets: "README.md / CHANGELOG.md / docs/USAGE.md / docs/PRIVACY.md",
+            keywords: ["userscript", "tampermonkey", "extension", "clipboard", "browser", "dom", "javascript", "chatgpt", "gemini"]
+        },
+        data_analysis: {
+            name: "Data / Quant Analysis",
+            path: "",
+            techStack: "Python, Pandas, SQLite / Parquet, API data source, analysis / backtesting",
+            goldenRules: [
+                "嚴格防止 look-ahead bias，不可偷看未來資料。",
+                "資料清理、特徵工程、訓練、驗證、測試必須清楚分層。",
+                "大型 DataFrame 運算優先向量化，避免不必要的慢速迴圈。",
+                "外部 API 必須處理 rate limit、timeout、斷線與重試。",
+                "任何績效、分析或結論都必須標明假設、限制與資料品質風險。"
+            ].join("\n"),
+            testCommands: [
+                "python -m pytest",
+                "手動測試：資料下載、清理、特徵、回測、報告輸出"
+            ].join("\n"),
+            docsTargets: "README.md / docs/ANALYSIS_NOTES.md / docs/TEST_LOG.md / .cursor/rules/data-analysis.mdc",
+            keywords: ["data", "pandas", "quant", "backtest", "analysis", "api", "sqlite", "parquet", "資料", "回測"]
+        },
+        media_tool: {
+            name: "Media Processing Tool",
+            path: "",
+            techStack: "Python, ffmpeg, audio / video processing, transcription / subtitles, background tasks",
+            goldenRules: [
+                "不可阻塞 GUI 或主流程，長時間媒體處理必須有進度、取消與 log。",
+                "必須處理 ffmpeg 路徑、檔案不存在、壞檔、中文路徑與長路徑。",
+                "GPU / CPU fallback 或外部工具 fallback 必須有明確錯誤訊息。",
+                "不可刪除既有輸出、暫存、摘要、字幕或轉檔功能。",
+                "大型檔案處理必須避免一次性讀入造成記憶體暴衝。"
+            ].join("\n"),
+            testCommands: [
+                "python main.py",
+                "python -m pytest",
+                "手動測試：短檔、長檔、壞檔、中文檔名、取消、輸出檔案驗證"
+            ].join("\n"),
+            docsTargets: "README.md / docs/RUNTIME.md / docs/BUGFIX_LOG.md / .cursor/rules/media-tool.mdc",
+            keywords: ["media", "audio", "video", "ffmpeg", "whisper", "subtitle", "transcribe", "mp3", "mp4", "音訊", "影片"]
+        },
+        downloader_tool: {
+            name: "Downloader / Automation Tool",
+            path: "",
+            techStack: "Python / JavaScript, downloader, retries, cookies, browser automation, file I/O",
+            goldenRules: [
+                "不可破壞既有成功下載流程。",
+                "下載失敗必須保留可重試狀態、明確錯誤原因與 log。",
+                "必須嚴格處理檔名限制、路徑限制、重複檔名與部分下載檔。",
+                "cookies、token、headers、browser automation fallback 不可互相覆蓋有效結果。",
+                "遇到 DRM、付費牆、權限不足或伺服器封鎖，必須明確提示，不可假裝可繞過。"
+            ].join("\n"),
+            testCommands: [
+                "python main.py",
+                "python -m pytest",
+                "手動測試：成功下載、失敗 retry、cookies/token 更新、重複檔名、取消與恢復"
+            ].join("\n"),
+            docsTargets: "README.md / docs/DOWNLOAD_FLOW.md / docs/BUGFIX_LOG.md / .cursor/rules/downloader-tool.mdc",
+            keywords: ["download", "downloader", "yt-dlp", "playwright", "cookies", "retry", "automation", "下載"]
         }
     };
 
