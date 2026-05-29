@@ -1,13 +1,8 @@
 // ==UserScript==
 // @name         AI Prompt Bridge
 // @namespace    https://ai-prompt-bridge.local/ai-prompt-bridge
-<<<<<<< HEAD
-// @version      1.4.0
-// @description  Cross-AI prompt bridge for ChatGPT, Gemini, Claude, DeepSeek, Qwen, Perplexity and Cursor workflows. Adds project presets, smart project detection, and project-aware prompts.
-=======
-// @version      1.6.0
-// @description  Cross-AI prompt bridge for ChatGPT, Gemini, Claude, DeepSeek, Qwen, Perplexity and Cursor workflows. Adds full-session rich-text copy for Word / OneNote / Outlook.
->>>>>>> 0f40809 (feat: add full-session rich text copy)
+// @version      1.7.0
+// @description  Cross-AI prompt bridge for ChatGPT, Gemini, Claude, DeepSeek, Qwen, Perplexity and Cursor workflows. Adds drag-anywhere panel movement while preserving button and input interactions.
 // @author       Rossi
 // @match        https://chatgpt.com/*
 // @match        https://chat.openai.com/*
@@ -35,11 +30,7 @@
 (function () {
     "use strict";
 
-<<<<<<< HEAD
-    const AI_PROMPT_BRIDGE_VERSION = "1.4.0";
-=======
-    const AI_PROMPT_BRIDGE_VERSION = "1.6.0";
->>>>>>> 0f40809 (feat: add full-session rich text copy)
+    const AI_PROMPT_BRIDGE_VERSION = "1.7.0";
     console.log("[AI Prompt Bridge] injected", AI_PROMPT_BRIDGE_VERSION, location.href);
 
     function showStartupProbe() {
@@ -75,23 +66,13 @@
         }
     }
 
-<<<<<<< HEAD
-    const STORAGE_KEY = "ai_prompt_bridge_payload_v14";
-    const PANEL_POS_KEY = "ai_prompt_bridge_panel_position_v14";
-    const PANEL_ID = "ai-prompt-bridge-panel-v14";
-    const BUBBLE_ID = "ai-prompt-bridge-restore-bubble-v14";
-    const COLLAPSED_KEY = "ai_prompt_bridge_collapsed_v14";
-    const HIDDEN_KEY = "ai_prompt_bridge_hidden_v14";
-    const PROJECT_KEY = "ai_prompt_bridge_project_key_v14";
-=======
-    const STORAGE_KEY = "ai_prompt_bridge_payload_v16";
-    const PANEL_POS_KEY = "ai_prompt_bridge_panel_position_v16";
-    const PANEL_ID = "ai-prompt-bridge-panel-v16";
-    const BUBBLE_ID = "ai-prompt-bridge-restore-bubble-v16";
-    const COLLAPSED_KEY = "ai_prompt_bridge_collapsed_v16";
-    const HIDDEN_KEY = "ai_prompt_bridge_hidden_v16";
-    const PROJECT_KEY = "ai_prompt_bridge_project_key_v16";
->>>>>>> 0f40809 (feat: add full-session rich text copy)
+    const STORAGE_KEY = "ai_prompt_bridge_payload_v17";
+    const PANEL_POS_KEY = "ai_prompt_bridge_panel_position_v17";
+    const PANEL_ID = "ai-prompt-bridge-panel-v17";
+    const BUBBLE_ID = "ai-prompt-bridge-restore-bubble-v17";
+    const COLLAPSED_KEY = "ai_prompt_bridge_collapsed_v17";
+    const HIDDEN_KEY = "ai_prompt_bridge_hidden_v17";
+    const PROJECT_KEY = "ai_prompt_bridge_project_key_v17";
 
     const PROJECTS = {
         auto: {
@@ -1579,7 +1560,24 @@ ${body}
         }
     }
 
-    function makeDraggable(panel, dragHandle) {
+    function isInteractivePanelTarget(target) {
+        if (!target || !target.closest) return false;
+
+        return Boolean(target.closest([
+            "button",
+            "select",
+            "option",
+            "input",
+            "textarea",
+            "a",
+            "label",
+            "[contenteditable='true']",
+            "[role='button']",
+            "[data-ai-bridge-no-drag='1']"
+        ].join(",")));
+    }
+
+    function makeDraggable(panel, dragSurface, clickHandle = null) {
         let isDragging = false;
         let moved = false;
         let startX = 0;
@@ -1587,8 +1585,9 @@ ${body}
         let startLeft = 0;
         let startTop = 0;
 
-        dragHandle.addEventListener("mousedown", (event) => {
+        dragSurface.addEventListener("mousedown", (event) => {
             if (event.button !== 0) return;
+            if (isInteractivePanelTarget(event.target)) return;
 
             isDragging = true;
             moved = false;
@@ -1603,6 +1602,7 @@ ${body}
             panel.style.top = `${startTop}px`;
             panel.style.right = "";
             panel.style.bottom = "";
+            panel.style.cursor = "grabbing";
 
             event.preventDefault();
         });
@@ -1627,13 +1627,22 @@ ${body}
         document.addEventListener("mouseup", async () => {
             if (!isDragging) return;
             isDragging = false;
+            panel.style.cursor = "";
+
             await savePanelPosition(panel);
 
             if (moved) {
-                dragHandle.dataset.justDragged = "1";
+                panel.dataset.justDragged = "1";
+                if (clickHandle) {
+                    clickHandle.dataset.justDragged = "1";
+                }
+
                 setTimeout(() => {
-                    dragHandle.dataset.justDragged = "0";
-                }, 150);
+                    panel.dataset.justDragged = "0";
+                    if (clickHandle) {
+                        clickHandle.dataset.justDragged = "0";
+                    }
+                }, 180);
             }
         });
     }
@@ -1660,6 +1669,7 @@ ${body}
         panel.style.fontFamily = "Arial, sans-serif";
         panel.style.maxWidth = "300px";
         panel.style.userSelect = "none";
+        panel.title = "空白處可拖曳移動；按鈕與下拉選單仍可正常點擊";
         panel.style.display = hidden ? "none" : "block";
 
         await restorePanelPosition(panel);
@@ -1671,7 +1681,7 @@ ${body}
         title.style.marginBottom = "6px";
         title.style.cursor = "grab";
         title.style.color = "#ffffff";
-        title.title = "拖曳移動；點擊可收合 / 展開";
+        title.title = "可拖曳移動；點擊可收合 / 展開。面板其他非功能區域也可拖曳。";
 
         const content = document.createElement("div");
         content.style.display = collapsed ? "none" : "flex";
@@ -1680,7 +1690,7 @@ ${body}
 
         title.addEventListener("click", async (event) => {
             if (event.detail !== 1) return;
-            if (title.dataset.justDragged === "1") return;
+            if (title.dataset.justDragged === "1" || panel.dataset.justDragged === "1") return;
             const nextCollapsed = content.style.display !== "none";
             await setCollapsed(panel, content, nextCollapsed);
         });
@@ -1722,7 +1732,7 @@ ${body}
         (document.body || document.documentElement).appendChild(panel);
 
         await setCollapsed(panel, content, collapsed);
-        makeDraggable(panel, title);
+        makeDraggable(panel, panel, title);
         await updateStatus();
     }
 
@@ -1812,15 +1822,12 @@ ${body}
         GM_registerMenuCommand("Copy Full Session", async () => {
             await captureFullSession();
         });
-<<<<<<< HEAD
-=======
         GM_registerMenuCommand("Copy Rich Text for Word / OneNote", async () => {
             await copyRichTextForOffice();
         });
         GM_registerMenuCommand("Copy Full Session Rich Text for Word / OneNote", async () => {
             await copyFullSessionRichTextForOffice();
         });
->>>>>>> 0f40809 (feat: add full-session rich text copy)
     }
 
     onReady(async () => {

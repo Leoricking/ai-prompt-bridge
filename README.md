@@ -1,8 +1,4 @@
-<<<<<<< HEAD
-# AI Prompt Bridge v1.4
-=======
-# AI Prompt Bridge v1.6
->>>>>>> 0f40809 (feat: add full-session rich text copy)
+# AI Prompt Bridge v1.7
 
 `AI Prompt Bridge` 是一個給 **Opera / Chrome / Edge + Tampermonkey** 使用的跨 AI 搬運工腳本。
 
@@ -397,19 +393,6 @@ NotebookLM：放大量文件查詢
 | Alt+R | 強制重置面板位置到右下角 |
 
 
-<<<<<<< HEAD
-## 14. 使用方式
-
-```text
-1. 安裝 / 覆蓋 Tampermonkey 舊腳本
-2. Ctrl+S 儲存
-3. 回 ChatGPT / Gemini / DeepSeek / Claude
-4. Ctrl+F5
-5. 面板上方選 Project Context
-6. 來源 AI 按 Alt+C 或 Alt+S
-7. 到 ChatGPT 按 Alt+V 或 Alt+N
-8. Ctrl+V 貼上
-=======
 ## 14. Git Commit
 
 建議 commit message：
@@ -422,7 +405,6 @@ fix: preserve full-session copy output
 - Reset userscript version to 1.0.0.
 - Keep cross-AI capture, Cursor prompt generation, code review, visual review, session copy, and panel recovery features.
 - Add README with installation, shortcuts, and multi-model workflow documentation.
->>>>>>> 0f40809 (feat: add full-session rich text copy)
 ```
 
 ---
@@ -640,8 +622,6 @@ git commit -m "feat: add project-aware prompt presets" -m "- Add Project Context
 - Add presets for Music Studio, media-batch-downloader, TW-Quant-Cockpit, Media2Txt-Pro, SmartCleanerPro, and Generic project workflows.
 - Update README with project-aware workflow and usage examples."
 ```
-<<<<<<< HEAD
-=======
 
 ---
 
@@ -866,4 +846,83 @@ git commit -m "feat: add full-session rich text copy" -m "- Add Alt+Shift+W shor
 - Reuse rich HTML cleanup to remove web app backgrounds, buttons, SVG icons, and noisy attributes.
 - Keep Alt+W for single-answer rich text copy and Alt+S for raw full-session copy."
 ```
->>>>>>> 0f40809 (feat: add full-session rich text copy)
+
+---
+
+## v1.7：面板非功能區域可拖曳
+
+v1.7 新增面板拖曳優化：
+
+```text
+原本：只有標題列可拖曳
+現在：面板內所有非功能區域都可以按住拖曳
+```
+
+---
+
+### 可以拖曳的地方
+
+```text
+面板標題列
+面板空白區
+提示文字區
+按鈕之間的間距
+Project Context 周圍空白區
+```
+
+---
+
+### 不會觸發拖曳的地方
+
+為了避免影響正常操作，下面這些互動元件不會觸發拖曳：
+
+```text
+按鈕
+下拉選單
+輸入框
+文字區
+連結
+可編輯區域
+```
+
+所以你可以放心點：
+
+```text
+Alt+C 按鈕
+Alt+V 按鈕
+Alt+W / Alt+Shift+W 按鈕
+Project Context 下拉選單
+隱藏 / 重置按鈕
+```
+
+---
+
+### 操作方式
+
+```text
+1. 滑鼠移到面板非按鈕、非下拉選單的位置
+2. 按住左鍵
+3. 拖到想要的位置
+4. 放開滑鼠
+5. 位置會自動保存
+```
+
+如果面板跑掉：
+
+```text
+Alt+R
+```
+
+即可重置到右下角。
+
+---
+
+## v1.7 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "fix: allow dragging panel from non-interactive areas" -m "- Allow the AI Prompt Bridge panel to be dragged from any non-functional area.
+- Preserve normal interactions for buttons, selects, inputs, links, and editable fields.
+- Prevent title collapse from triggering immediately after dragging.
+- Update README with drag behavior and interaction rules."
+```
