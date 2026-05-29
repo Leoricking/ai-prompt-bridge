@@ -1,8 +1,13 @@
 // ==UserScript==
 // @name         AI Prompt Bridge
 // @namespace    https://ai-prompt-bridge.local/ai-prompt-bridge
+<<<<<<< HEAD
 // @version      1.4.0
 // @description  Cross-AI prompt bridge for ChatGPT, Gemini, Claude, DeepSeek, Qwen, Perplexity and Cursor workflows. Adds project presets, smart project detection, and project-aware prompts.
+=======
+// @version      1.6.0
+// @description  Cross-AI prompt bridge for ChatGPT, Gemini, Claude, DeepSeek, Qwen, Perplexity and Cursor workflows. Adds full-session rich-text copy for Word / OneNote / Outlook.
+>>>>>>> 0f40809 (feat: add full-session rich text copy)
 // @author       Rossi
 // @match        https://chatgpt.com/*
 // @match        https://chat.openai.com/*
@@ -30,7 +35,11 @@
 (function () {
     "use strict";
 
+<<<<<<< HEAD
     const AI_PROMPT_BRIDGE_VERSION = "1.4.0";
+=======
+    const AI_PROMPT_BRIDGE_VERSION = "1.6.0";
+>>>>>>> 0f40809 (feat: add full-session rich text copy)
     console.log("[AI Prompt Bridge] injected", AI_PROMPT_BRIDGE_VERSION, location.href);
 
     function showStartupProbe() {
@@ -66,6 +75,7 @@
         }
     }
 
+<<<<<<< HEAD
     const STORAGE_KEY = "ai_prompt_bridge_payload_v14";
     const PANEL_POS_KEY = "ai_prompt_bridge_panel_position_v14";
     const PANEL_ID = "ai-prompt-bridge-panel-v14";
@@ -73,6 +83,15 @@
     const COLLAPSED_KEY = "ai_prompt_bridge_collapsed_v14";
     const HIDDEN_KEY = "ai_prompt_bridge_hidden_v14";
     const PROJECT_KEY = "ai_prompt_bridge_project_key_v14";
+=======
+    const STORAGE_KEY = "ai_prompt_bridge_payload_v16";
+    const PANEL_POS_KEY = "ai_prompt_bridge_panel_position_v16";
+    const PANEL_ID = "ai-prompt-bridge-panel-v16";
+    const BUBBLE_ID = "ai-prompt-bridge-restore-bubble-v16";
+    const COLLAPSED_KEY = "ai_prompt_bridge_collapsed_v16";
+    const HIDDEN_KEY = "ai_prompt_bridge_hidden_v16";
+    const PROJECT_KEY = "ai_prompt_bridge_project_key_v16";
+>>>>>>> 0f40809 (feat: add full-session rich text copy)
 
     const PROJECTS = {
         auto: {
@@ -869,6 +888,497 @@
         ].join("\\n");
     }
 
+
+    function getSelectionHtml() {
+        try {
+            const selection = window.getSelection();
+            if (!selection || selection.rangeCount === 0 || String(selection).trim().length === 0) {
+                return null;
+            }
+
+            const container = document.createElement("div");
+            for (let i = 0; i < selection.rangeCount; i += 1) {
+                container.appendChild(selection.getRangeAt(i).cloneContents());
+            }
+
+            if (!normalizeText(container.innerText || container.textContent || "")) {
+                return null;
+            }
+
+            return container;
+        } catch (error) {
+            console.warn("[AI Prompt Bridge] selection html failed", error);
+            return null;
+        }
+    }
+
+    function getLatestAnswerElement() {
+        const site = getSiteName();
+        let selectors = [];
+
+        if (site === "ChatGPT") {
+            selectors = [
+                '[data-message-author-role="assistant"] .markdown',
+                '[data-message-author-role="assistant"]',
+                ".agent-turn .markdown",
+                ".markdown"
+            ];
+        } else if (site === "Gemini") {
+            selectors = [
+                "message-content",
+                ".message-content",
+                "model-response",
+                "render-viewer",
+                "[data-response-index]",
+                ".conversation-container"
+            ];
+        } else if (site === "Claude") {
+            selectors = [
+                '[data-testid*="message"]',
+                ".font-claude-message",
+                ".prose",
+                "[class*='message']"
+            ];
+        } else if (site === "DeepSeek") {
+            selectors = [
+                ".ds-markdown",
+                ".markdown",
+                "[class*='markdown']",
+                "[class*='message']"
+            ];
+        } else if (site === "Perplexity") {
+            selectors = [
+                ".prose",
+                "[class*='answer']",
+                "[class*='markdown']"
+            ];
+        } else {
+            selectors = [
+                ".markdown",
+                ".prose",
+                "[class*='markdown']",
+                "[class*='message']",
+                "main"
+            ];
+        }
+
+        const candidates = [];
+        selectors.forEach((selector) => {
+            try {
+                document.querySelectorAll(selector).forEach((element) => {
+                    const text = normalizeText(element.innerText || element.textContent || "");
+                    if (text.length > 20) {
+                        candidates.push({ element, textLength: text.length });
+                    }
+                });
+            } catch (error) {
+                console.warn("[AI Prompt Bridge] selector failed", selector, error);
+            }
+        });
+
+        if (candidates.length === 0) {
+            return null;
+        }
+
+        return candidates[candidates.length - 1].element;
+    }
+
+
+    function getSessionRootElement() {
+        const site = getSiteName();
+        let selectors = [];
+
+        if (site === "ChatGPT") {
+            selectors = [
+                "main",
+                '[role="main"]',
+                '[data-testid*="conversation"]',
+                ".conversation"
+            ];
+        } else if (site === "Gemini") {
+            selectors = [
+                "main",
+                '[role="main"]',
+                ".conversation-container",
+                "bard-sidenav-content",
+                "chat-window"
+            ];
+        } else if (site === "Claude") {
+            selectors = [
+                "main",
+                '[role="main"]',
+                ".conversation",
+                "[class*='conversation']"
+            ];
+        } else if (site === "DeepSeek") {
+            selectors = [
+                "main",
+                '[role="main"]',
+                "[class*='chat']",
+                "[class*='conversation']"
+            ];
+        } else if (site === "Perplexity") {
+            selectors = [
+                "main",
+                '[role="main"]',
+                "[class*='thread']",
+                "[class*='answer']"
+            ];
+        } else {
+            selectors = [
+                "main",
+                '[role="main"]',
+                "article",
+                ".prose",
+                ".markdown",
+                "body"
+            ];
+        }
+
+        const candidates = [];
+
+        selectors.forEach((selector) => {
+            try {
+                document.querySelectorAll(selector).forEach((element) => {
+                    const text = normalizeText(element.innerText || element.textContent || "");
+                    if (text.length > 50) {
+                        candidates.push({
+                            element,
+                            textLength: text.length
+                        });
+                    }
+                });
+            } catch (error) {
+                console.warn("[AI Prompt Bridge] session selector failed", selector, error);
+            }
+        });
+
+        if (candidates.length === 0) {
+            return document.body || document.documentElement;
+        }
+
+        candidates.sort((a, b) => b.textLength - a.textLength);
+        return candidates[0].element;
+    }
+
+    function pruneRichSessionClone(clone) {
+        const site = getSiteName();
+
+        const removeSelectors = [
+            `#${PANEL_ID}`,
+            `#${BUBBLE_ID}`,
+            "#ai-prompt-bridge-startup-probe",
+            "aside",
+            "nav",
+            "header",
+            "footer",
+            "form",
+            "textarea",
+            "input",
+            "select",
+            "button",
+            "svg",
+            "script",
+            "style",
+            "noscript",
+            "[contenteditable='true']",
+            "[data-testid*='sidebar']",
+            "[data-testid*='composer']",
+            "[data-testid*='copy']",
+            "[aria-label*='Copy']",
+            "[aria-label*='複製']",
+            "[aria-label*='Send']",
+            "[aria-label*='送出']",
+            ".copy-button",
+            ".code-copy-button",
+            ".sr-only"
+        ];
+
+        removeSelectors.forEach((selector) => {
+            try {
+                clone.querySelectorAll(selector).forEach((el) => el.remove());
+            } catch (_) {}
+        });
+
+        const transcriptSelectorsBySite = {
+            ChatGPT: [
+                '[data-message-author-role]',
+                ".agent-turn",
+                ".markdown"
+            ],
+            Gemini: [
+                "user-query",
+                "message-content",
+                ".message-content",
+                "model-response",
+                "render-viewer"
+            ],
+            Claude: [
+                '[data-testid*="user-message"]',
+                '[data-testid*="assistant-message"]',
+                '[data-testid*="message"]',
+                ".prose"
+            ],
+            DeepSeek: [
+                ".ds-markdown",
+                ".markdown",
+                "[class*='message']"
+            ],
+            Perplexity: [
+                ".prose",
+                "[class*='answer']",
+                "[class*='query']"
+            ]
+        };
+
+        const transcriptSelectors = transcriptSelectorsBySite[site] || [];
+        const transcriptNodes = [];
+
+        transcriptSelectors.forEach((selector) => {
+            try {
+                clone.querySelectorAll(selector).forEach((node) => {
+                    const text = normalizeText(node.innerText || node.textContent || "");
+                    if (text.length > 10 && !transcriptNodes.includes(node)) {
+                        transcriptNodes.push(node);
+                    }
+                });
+            } catch (_) {}
+        });
+
+        if (transcriptNodes.length >= 2) {
+            const transcript = document.createElement("div");
+            transcriptNodes.forEach((node, index) => {
+                const block = document.createElement("section");
+                block.setAttribute("data-ai-prompt-bridge-message", String(index + 1));
+                block.appendChild(node.cloneNode(true));
+                transcript.appendChild(block);
+            });
+            return transcript;
+        }
+
+        return clone;
+    }
+
+    async function copyFullSessionRichTextForOffice() {
+        const sessionRoot = getSessionRootElement();
+
+        if (!sessionRoot) {
+            alert("沒有找到可複製的完整 session。請確認目前頁面已有對話內容。");
+            return;
+        }
+
+        let clone = cleanRichClone(sessionRoot);
+        clone = pruneRichSessionClone(clone);
+
+        const textContent = normalizeText(clone.innerText || clone.textContent || "");
+
+        if (!textContent || textContent.length < 20) {
+            alert("抓到的 session 內容太短。請先往上捲動載入舊訊息，再按 Alt+Shift+W。");
+            return;
+        }
+
+        const headerHtml = [
+            `<h1>AI Session Export</h1>`,
+            `<p><strong>Source:</strong> ${escapeHtml(getSiteName())}</p>`,
+            `<p><strong>Captured At:</strong> ${escapeHtml(nowText())}</p>`,
+            `<p><strong>URL:</strong> ${escapeHtml(location.href)}</p>`,
+            `<hr>`
+        ].join("");
+
+        const htmlContent = normalizeRichHtml(headerHtml + (clone.innerHTML || `<pre>${escapeHtml(textContent)}</pre>`));
+
+        try {
+            if (typeof ClipboardItem !== "undefined" && navigator.clipboard?.write) {
+                await navigator.clipboard.write([
+                    new ClipboardItem({
+                        "text/html": new Blob([htmlContent], { type: "text/html" }),
+                        "text/plain": new Blob([
+                            [
+                                "# AI Session Export",
+                                `Source: ${getSiteName()}`,
+                                `Captured_At: ${nowText()}`,
+                                `URL: ${location.href}`,
+                                "",
+                                textContent
+                            ].join("\n")
+                        ], { type: "text/plain" })
+                    })
+                ]);
+                toast(`已複製完整 Session 富文本格式（${textContent.length} 字）`);
+                return;
+            }
+        } catch (error) {
+            console.warn("[AI Prompt Bridge] full-session rich clipboard failed, fallback to plain text", error);
+        }
+
+        await copyText([
+            "# AI Session Export",
+            `Source: ${getSiteName()}`,
+            `Captured_At: ${nowText()}`,
+            `URL: ${location.href}`,
+            "",
+            textContent
+        ].join("\n"), `已降級複製完整 Session 純文字（${textContent.length} 字）`);
+    }
+
+
+    function cleanRichClone(inputElement) {
+        const clone = inputElement.cloneNode(true);
+
+        const removeSelectors = [
+            "button",
+            "svg",
+            "script",
+            "style",
+            "noscript",
+            "textarea",
+            "input",
+            "select",
+            "nav",
+            "header",
+            "footer",
+            "[contenteditable='true']",
+            "[data-testid*='copy']",
+            "[aria-label*='Copy']",
+            "[aria-label*='複製']",
+            ".copy-button",
+            ".code-copy-button",
+            ".sr-only"
+        ];
+
+        removeSelectors.forEach((selector) => {
+            clone.querySelectorAll(selector).forEach((el) => el.remove());
+        });
+
+        clone.querySelectorAll("*").forEach((el) => {
+            el.removeAttribute("class");
+            el.removeAttribute("style");
+            el.removeAttribute("data-testid");
+            el.removeAttribute("aria-label");
+            el.removeAttribute("role");
+
+            if (el.tagName === "A") {
+                const href = el.getAttribute("href");
+                if (href && href.startsWith("/")) {
+                    try {
+                        el.setAttribute("href", new URL(href, location.origin).href);
+                    } catch (_) {}
+                }
+            }
+        });
+
+        return clone;
+    }
+
+    function escapeHtml(value) {
+        return safeText(value)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;");
+    }
+
+    function normalizeRichHtml(html) {
+        const body = safeText(html).trim();
+
+        return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+body {
+  font-family: Calibri, "Microsoft JhengHei", "Noto Sans TC", Arial, sans-serif;
+  font-size: 11pt;
+  color: #111827;
+  background: #ffffff;
+  line-height: 1.45;
+}
+h1, h2, h3, h4 {
+  color: #111827;
+  font-weight: 700;
+  margin: 14px 0 8px;
+}
+p { margin: 6px 0; }
+ul, ol { margin: 6px 0 6px 22px; }
+li { margin: 3px 0; }
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 8px 0;
+}
+th, td {
+  border: 1px solid #d1d5db;
+  padding: 6px 8px;
+  vertical-align: top;
+}
+th {
+  background: #f3f4f6;
+  font-weight: 700;
+}
+pre {
+  white-space: pre-wrap;
+  background: #f8fafc;
+  border: 1px solid #e5e7eb;
+  padding: 8px;
+  border-radius: 4px;
+}
+code {
+  font-family: Consolas, "Courier New", monospace;
+  background: #f3f4f6;
+  padding: 1px 3px;
+}
+blockquote {
+  border-left: 3px solid #d1d5db;
+  margin: 8px 0;
+  padding-left: 10px;
+  color: #374151;
+}
+</style>
+</head>
+<body>
+${body}
+</body>
+</html>`;
+    }
+
+    async function copyRichTextForOffice() {
+        const selectedContainer = getSelectionHtml();
+        const targetElement = selectedContainer || getLatestAnswerElement();
+
+        if (!targetElement) {
+            alert("沒有找到可複製的 AI 回答。請先選取內容，或確認目前頁面有 AI 回覆。");
+            return;
+        }
+
+        const clone = cleanRichClone(targetElement);
+        const textContent = normalizeText(clone.innerText || clone.textContent || "");
+
+        if (!textContent) {
+            alert("抓到的內容是空的，請改用手動選取後再按 Alt+W。");
+            return;
+        }
+
+        const htmlContent = normalizeRichHtml(clone.innerHTML || `<pre>${escapeHtml(textContent)}</pre>`);
+
+        try {
+            if (typeof ClipboardItem !== "undefined" && navigator.clipboard?.write) {
+                await navigator.clipboard.write([
+                    new ClipboardItem({
+                        "text/html": new Blob([htmlContent], { type: "text/html" }),
+                        "text/plain": new Blob([textContent], { type: "text/plain" })
+                    })
+                ]);
+                toast(`已複製 Word / OneNote 富文本格式（${textContent.length} 字）`);
+                return;
+            }
+        } catch (error) {
+            console.warn("[AI Prompt Bridge] rich clipboard failed, fallback to plain text", error);
+        }
+
+        await copyText(textContent, `已降級複製純文字（${textContent.length} 字）`);
+    }
+
+
     async function captureCurrentAnswer() {
         const selected = getSelectedText();
         const text = getLastAnswer();
@@ -1184,6 +1694,8 @@
         content.appendChild(createButton("⑥ 變成 Cursor Rule", () => copyPrompt(buildRule, "已複製 Make Rule Prompt"), "#7c3aed"));
         content.appendChild(createButton("⑦ 複製整個 Session Alt+S", captureFullSession, "#be123c"));
         content.appendChild(createButton("⑨ 整理成 OneNote 筆記 Alt+N", () => copyPrompt(buildOneNotePrompt, "已複製 OneNote 筆記整理 Prompt"), "#d97706"));
+        content.appendChild(createButton("⑩ 複製 Word/OneNote 格式 Alt+W", copyRichTextForOffice, "#0891b2"));
+        content.appendChild(createButton("⑪ 複製整頁 Word/OneNote Alt+Shift+W", copyFullSessionRichTextForOffice, "#0e7490"));
         content.appendChild(createButton("⑧ 重置面板位置", async () => {
             const p = document.getElementById(PANEL_ID);
             if (p) {
@@ -1194,7 +1706,7 @@
         }, "#0f766e"));
 
         const hint = document.createElement("div");
-        hint.textContent = "Alt+C 抓原文 / Alt+V Cursor / Alt+S session / Alt+N OneNote / Alt+B hide/show";
+        hint.textContent = "Alt+C 原文 / Alt+S session / Alt+W 單段格式 / Alt+Shift+W 整頁格式";
         hint.style.fontSize = "11px";
         hint.style.color = "#d1d5db";
         hint.style.marginTop = "2px";
@@ -1254,6 +1766,16 @@
             await copyPrompt(buildOneNotePrompt, "已複製 OneNote 筆記整理 Prompt");
         }
 
+        if (event.altKey && event.shiftKey && !event.ctrlKey && key === "w") {
+            event.preventDefault();
+            await copyFullSessionRichTextForOffice();
+        }
+
+        if (event.altKey && !event.shiftKey && !event.ctrlKey && key === "w") {
+            event.preventDefault();
+            await copyRichTextForOffice();
+        }
+
         if (event.altKey && !event.shiftKey && !event.ctrlKey && key === "b") {
             event.preventDefault();
 
@@ -1290,6 +1812,15 @@
         GM_registerMenuCommand("Copy Full Session", async () => {
             await captureFullSession();
         });
+<<<<<<< HEAD
+=======
+        GM_registerMenuCommand("Copy Rich Text for Word / OneNote", async () => {
+            await copyRichTextForOffice();
+        });
+        GM_registerMenuCommand("Copy Full Session Rich Text for Word / OneNote", async () => {
+            await copyFullSessionRichTextForOffice();
+        });
+>>>>>>> 0f40809 (feat: add full-session rich text copy)
     }
 
     onReady(async () => {

@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 # AI Prompt Bridge v1.4
+=======
+# AI Prompt Bridge v1.6
+>>>>>>> 0f40809 (feat: add full-session rich text copy)
 
 `AI Prompt Bridge` 是一個給 **Opera / Chrome / Edge + Tampermonkey** 使用的跨 AI 搬運工腳本。
 
@@ -11,25 +15,6 @@ AI Prompt Bridge
 原本的 `rossi-` 前綴已移除，方便上傳到 Git。
 
 ---
-
-## 0. 安裝步驟
-
-安裝 Tampermonkey
-
-<img width="378" height="634" alt="1 安裝 Tampermonkey 後, 點新增腳本" src="https://github.com/user-attachments/assets/c3712914-8341-492a-86f5-da8d58c69ec4" />
-
-
-新增此腳本
-
-<img width="1800" height="936" alt="2 新增此腳本" src="https://github.com/user-attachments/assets/f4fa7de3-6c4c-428d-9fc8-0949c790b699" />
-
-
-啟用此功能
-<img width="2654" height="1795" alt="image" src="https://github.com/user-attachments/assets/008ca855-fc6e-411a-a50a-b042aae4d92d" />
-
-
-介面
-<img width="1848" height="835" alt="3 介面" src="https://github.com/user-attachments/assets/ec509b8e-081a-4bdf-9055-7b9f4b5884b6" />
 
 ## 1. 專案檔案
 
@@ -412,6 +397,7 @@ NotebookLM：放大量文件查詢
 | Alt+R | 強制重置面板位置到右下角 |
 
 
+<<<<<<< HEAD
 ## 14. 使用方式
 
 ```text
@@ -423,6 +409,20 @@ NotebookLM：放大量文件查詢
 6. 來源 AI 按 Alt+C 或 Alt+S
 7. 到 ChatGPT 按 Alt+V 或 Alt+N
 8. Ctrl+V 貼上
+=======
+## 14. Git Commit
+
+建議 commit message：
+
+```text
+fix: preserve full-session copy output
+
+- Rename Rossi AI Prompt Bridge to AI Prompt Bridge.
+- Remove rossi prefix from distributable filenames.
+- Reset userscript version to 1.0.0.
+- Keep cross-AI capture, Cursor prompt generation, code review, visual review, session copy, and panel recovery features.
+- Add README with installation, shortcuts, and multi-model workflow documentation.
+>>>>>>> 0f40809 (feat: add full-session rich text copy)
 ```
 
 ---
@@ -640,3 +640,230 @@ git commit -m "feat: add project-aware prompt presets" -m "- Add Project Context
 - Add presets for Music Studio, media-batch-downloader, TW-Quant-Cockpit, Media2Txt-Pro, SmartCleanerPro, and Generic project workflows.
 - Update README with project-aware workflow and usage examples."
 ```
+<<<<<<< HEAD
+=======
+
+---
+
+## v1.5：Word / OneNote 富文本一鍵複製
+
+v1.5 新增：
+
+```text
+⑩ 複製 Word/OneNote 格式 Alt+W
+```
+
+這個功能用來解決從 ChatGPT / Gemini / DeepSeek / Claude 複製內容到 Word、OneNote、Outlook、Notion 時，格式跑掉、黑色背景被帶入、表格碎掉、標題與粗體消失的問題。
+
+---
+
+### 為什麼不要直接改 Alt+C？
+
+`Alt+C` 保留原本功能：
+
+```text
+抓原文
+存暫存區
+給 Alt+V / Alt+N / Code Review / Make Rule 使用
+```
+
+`Alt+W` 則專門做：
+
+```text
+複製乾淨 HTML 富文本
+貼到 Word / OneNote / Outlook / Notion
+保留標題、粗體、清單、表格、code block
+移除網頁黑底、按鈕、SVG、雜訊樣式
+```
+
+所以 v1.5 採用「獨立按鈕 / 獨立快捷鍵」設計，避免破壞原本 Alt+C 工作流。
+
+---
+
+### 使用方式：複製單段 AI 回答到 Word / OneNote
+
+```text
+1. 在 ChatGPT / Gemini / DeepSeek / Claude 找到要保存的回答
+2. 如果只要其中一段，先用滑鼠選取
+3. 按 Alt+W，或點 ⑩ 複製 Word/OneNote 格式
+4. 開 Word / OneNote / Outlook / Notion
+5. Ctrl+V
+```
+
+如果沒有手動選取，腳本會嘗試自動抓最後一段 AI 回答。
+
+---
+
+### 適合貼到哪裡？
+
+```text
+Word：正式報告、客戶文件、可列印文件
+OneNote：個人知識庫、決策筆記、專案筆記
+Outlook / Gmail：寄送保留格式的內容
+Notion：保存帶格式筆記
+Google Docs：整理成線上文件
+```
+
+---
+
+### 複製方式比較
+
+| 複製方式 | 貼到 Word / OneNote 的效果 |
+|---|---|
+| 滑鼠全選 Ctrl+C | 容易帶入黑底、網頁樣式、按鈕、雜訊 |
+| AI 網頁內建 Copy | 常變成純 Markdown，表格與標題不一定好看 |
+| Alt+C | 純文字 / 原文，適合 AI Prompt 搬運 |
+| Alt+W | 乾淨 HTML 富文本，適合 Word / OneNote / Outlook |
+
+---
+
+### Alt+W 保留的格式
+
+```text
+標題 h1 / h2 / h3
+粗體 / 斜體
+清單
+表格
+code block
+引用區塊
+基本段落
+```
+
+### Alt+W 會移除的內容
+
+```text
+網頁黑色背景
+ChatGPT / Gemini 的複製按鈕
+SVG icon
+多餘 class / inline style
+script / style / input / textarea
+無障礙隱藏文字
+```
+
+---
+
+### 快捷鍵更新
+
+| 快捷鍵 | 功能 |
+|---|---|
+| Alt+C | 抓原文，給跨 AI 搬運與 Prompt 使用 |
+| Alt+V | 轉成 Cursor 修正任務 |
+| Alt+S | 複製整個 Session 原文 |
+| Alt+N | 轉成 OneNote / Notion / Markdown 決策筆記整理 Prompt |
+| Alt+W | 複製 Word / OneNote 富文本格式 |
+| Alt+B | 隱藏 / 顯示面板 |
+| Alt+R | 重置面板位置 |
+
+---
+
+## v1.5 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "feat: add rich text copy for Word and OneNote" -m "- Add Alt+W shortcut and panel button for Word / OneNote rich-text copy.
+- Copy clean HTML and plain text to the clipboard using ClipboardItem.
+- Preserve headings, bold text, lists, tables, code blocks, and blockquotes.
+- Remove web app styles, black backgrounds, buttons, SVG icons, and noisy attributes before copying.
+- Keep Alt+C unchanged for raw AI prompt transfer workflows."
+```
+
+---
+
+## v1.6：完整 Session 富文本複製到 Word / OneNote / Outlook
+
+v1.6 新增：
+
+```text
+⑪ 複製整頁 Word/OneNote Alt+Shift+W
+```
+
+這個功能和 v1.5 的 `Alt+W` 不同：
+
+```text
+Alt+W：複製單段 / 選取內容的 Word / OneNote 富文本格式
+Alt+Shift+W：複製目前頁面整個 session 的 Word / OneNote 富文本格式
+```
+
+---
+
+### 使用方式：整個 session 貼到 Word / OneNote
+
+```text
+1. 在 ChatGPT / Gemini / DeepSeek / Claude 頁面
+2. 如果對話很長，先往上捲動讓舊訊息載入
+3. 按 Alt+Shift+W
+4. 開 Word / OneNote / Outlook / Notion / Google Docs
+5. Ctrl+V
+```
+
+腳本會同時寫入：
+
+```text
+text/html：給 Word / OneNote / Outlook 保留格式
+text/plain：給 Notepad++ / 純文字工具備援
+```
+
+---
+
+### v1.6 會自動加入匯出標頭
+
+貼到 Word / OneNote 時，前面會包含：
+
+```text
+AI Session Export
+Source
+Captured At
+URL
+```
+
+方便日後追溯來源。
+
+---
+
+### v1.6 適合用在
+
+```text
+1. 把整段 ChatGPT 討論貼到 Word 做報告
+2. 把整段 Gemini 視覺分析貼到 OneNote 保存
+3. 把 DeepSeek / Claude review 全文存成專案紀錄
+4. 把完整 AI session 貼到 Outlook 寄給同事
+5. 把整段討論轉進 Notion / Google Docs
+```
+
+---
+
+### 注意事項
+
+```text
+Alt+Shift+W 只能複製目前頁面已載入到 DOM 的內容。
+如果對話非常長，請先往上捲動，讓舊訊息載入後再複製。
+```
+
+---
+
+### 快捷鍵更新
+
+| 快捷鍵 | 功能 |
+|---|---|
+| Alt+C | 抓原文，給跨 AI 搬運與 Prompt 使用 |
+| Alt+V | 轉成 Cursor 修正任務 |
+| Alt+S | 複製整個 Session 原文 |
+| Alt+N | 轉成 OneNote / Notion / Markdown 決策筆記整理 Prompt |
+| Alt+W | 複製單段 / 選取內容的 Word / OneNote 富文本格式 |
+| Alt+Shift+W | 複製整個 Session 的 Word / OneNote 富文本格式 |
+| Alt+B | 隱藏 / 顯示面板 |
+| Alt+R | 重置面板位置 |
+
+---
+
+## v1.6 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "feat: add full-session rich text copy" -m "- Add Alt+Shift+W shortcut and panel button for full-session Word / OneNote rich-text copy.
+- Export the current AI session as clean HTML and plain text clipboard formats.
+- Add source, captured time, and URL header to rich session exports.
+- Reuse rich HTML cleanup to remove web app backgrounds, buttons, SVG icons, and noisy attributes.
+- Keep Alt+W for single-answer rich text copy and Alt+S for raw full-session copy."
+```
+>>>>>>> 0f40809 (feat: add full-session rich text copy)
