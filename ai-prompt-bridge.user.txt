@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         AI Prompt Bridge
 // @namespace    https://ai-prompt-bridge.local/ai-prompt-bridge
-// @version      1.8.0
-// @description  Cross-AI prompt bridge for ChatGPT, Gemini, Claude, DeepSeek, Qwen, Perplexity and Cursor workflows. Public-safe build: removes private project presets and uses generic project context templates.
+// @version      1.10.0
+// @description  Cross-AI prompt bridge for ChatGPT, Gemini, Claude, DeepSeek, Qwen, Perplexity and Cursor workflows. Keeps original heading sizes while enlarging small body text to 20pt for OneNote.
 // @author       Rossi
 // @match        https://chatgpt.com/*
 // @match        https://chat.openai.com/*
@@ -30,7 +30,7 @@
 (function () {
     "use strict";
 
-    const AI_PROMPT_BRIDGE_VERSION = "1.8.0";
+    const AI_PROMPT_BRIDGE_VERSION = "1.10.0";
     console.log("[AI Prompt Bridge] injected", AI_PROMPT_BRIDGE_VERSION, location.href);
 
     function showStartupProbe() {
@@ -66,13 +66,13 @@
         }
     }
 
-    const STORAGE_KEY = "ai_prompt_bridge_payload_v18";
-    const PANEL_POS_KEY = "ai_prompt_bridge_panel_position_v18";
-    const PANEL_ID = "ai-prompt-bridge-panel-v18";
-    const BUBBLE_ID = "ai-prompt-bridge-restore-bubble-v18";
-    const COLLAPSED_KEY = "ai_prompt_bridge_collapsed_v18";
-    const HIDDEN_KEY = "ai_prompt_bridge_hidden_v18";
-    const PROJECT_KEY = "ai_prompt_bridge_project_key_v18";
+    const STORAGE_KEY = "ai_prompt_bridge_payload_v110";
+    const PANEL_POS_KEY = "ai_prompt_bridge_panel_position_v110";
+    const PANEL_ID = "ai-prompt-bridge-panel-v110";
+    const BUBBLE_ID = "ai-prompt-bridge-restore-bubble-v110";
+    const COLLAPSED_KEY = "ai_prompt_bridge_collapsed_v110";
+    const HIDDEN_KEY = "ai_prompt_bridge_hidden_v110";
+    const PROJECT_KEY = "ai_prompt_bridge_project_key_v110";
 
     const PROJECTS = {
         auto: {
@@ -1161,6 +1161,7 @@
             `<hr>`
         ].join("");
 
+        applyOneNoteInlineStyles(clone);
         const htmlContent = normalizeRichHtml(headerHtml + (clone.innerHTML || `<pre>${escapeHtml(textContent)}</pre>`));
 
         try {
@@ -1180,7 +1181,7 @@
                         ], { type: "text/plain" })
                     })
                 ]);
-                toast(`已複製完整 Session 富文本格式（${textContent.length} 字）`);
+                toast(`已複製完整 Session 富文本：內文 20pt、標題保留原大小（${textContent.length} 字）`);
                 return;
             }
         } catch (error) {
@@ -1254,6 +1255,59 @@
             .replace(/"/g, "&quot;");
     }
 
+
+    function applyOneNoteInlineStyles(root) {
+        try {
+            if (!root || !root.querySelectorAll) return root;
+
+            root.setAttribute("style", [
+                "font-family:'Microsoft JhengHei','Segoe UI',Calibri,'Noto Sans TC',Arial,sans-serif",
+                "font-size:20pt",
+                "line-height:1.6",
+                "color:#111111",
+                "background:#ffffff"
+            ].join(";"));
+
+            // Body text gets enlarged for OneNote readability.
+            root.querySelectorAll("p, li, td, th, div, span").forEach((el) => {
+                el.style.fontSize = "20pt";
+                el.style.lineHeight = "1.6";
+                el.style.color = "#111111";
+                el.style.backgroundColor = "transparent";
+            });
+
+            // Preserve heading sizes from the source page as much as possible.
+            // Only normalize color / spacing; do not force H1/H2/H3/H4 to 30/26/23/21pt.
+            root.querySelectorAll("h1, h2, h3, h4, h5, h6").forEach((el) => {
+                el.style.color = "#111111";
+                el.style.fontWeight = el.style.fontWeight || "700";
+                el.style.backgroundColor = "transparent";
+                el.style.lineHeight = el.style.lineHeight || "1.35";
+            });
+
+            // Code remains smaller than body text for readability and layout.
+            root.querySelectorAll("pre, code").forEach((el) => {
+                el.style.fontSize = "16pt";
+                el.style.lineHeight = "1.45";
+            });
+
+            root.querySelectorAll("table").forEach((el) => {
+                el.style.borderCollapse = "collapse";
+                el.style.width = "100%";
+            });
+
+            root.querySelectorAll("th, td").forEach((el) => {
+                el.style.border = "1px solid #d1d5db";
+                el.style.padding = "8px 10px";
+                el.style.verticalAlign = "top";
+            });
+        } catch (error) {
+            console.warn("[AI Prompt Bridge] apply inline OneNote styles failed", error);
+        }
+        return root;
+    }
+
+
     function normalizeRichHtml(html) {
         const body = safeText(html).trim();
 
@@ -1262,57 +1316,97 @@
 <head>
 <meta charset="utf-8">
 <style>
-body {
-  font-family: Calibri, "Microsoft JhengHei", "Noto Sans TC", Arial, sans-serif;
-  font-size: 11pt;
-  color: #111827;
+body,
+.ai-prompt-bridge-onenote-export {
+  font-family: "Microsoft JhengHei", "Segoe UI", Calibri, "Noto Sans TC", Arial, sans-serif;
+  font-size: 20pt;
+  color: #111111;
   background: #ffffff;
-  line-height: 1.45;
+  line-height: 1.6;
 }
-h1, h2, h3, h4 {
-  color: #111827;
+.ai-prompt-bridge-onenote-export p,
+.ai-prompt-bridge-onenote-export li,
+.ai-prompt-bridge-onenote-export td,
+.ai-prompt-bridge-onenote-export th,
+.ai-prompt-bridge-onenote-export div,
+.ai-prompt-bridge-onenote-export span {
+  font-size: 20pt;
+  line-height: 1.6;
+}
+.ai-prompt-bridge-onenote-export h1,
+.ai-prompt-bridge-onenote-export h2,
+.ai-prompt-bridge-onenote-export h3,
+.ai-prompt-bridge-onenote-export h4,
+.ai-prompt-bridge-onenote-export h5,
+.ai-prompt-bridge-onenote-export h6 {
+  color: #111111;
   font-weight: 700;
+  line-height: 1.35;
   margin: 14px 0 8px;
 }
-p { margin: 6px 0; }
-ul, ol { margin: 6px 0 6px 22px; }
-li { margin: 3px 0; }
-table {
-  border-collapse: collapse;
-  width: 100%;
+.ai-prompt-bridge-onenote-export p {
   margin: 8px 0;
 }
-th, td {
+.ai-prompt-bridge-onenote-export ul,
+.ai-prompt-bridge-onenote-export ol {
+  margin: 8px 0 8px 28px;
+  padding-left: 18px;
+}
+.ai-prompt-bridge-onenote-export li {
+  margin: 5px 0;
+}
+.ai-prompt-bridge-onenote-export table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 12px 0;
+}
+.ai-prompt-bridge-onenote-export th,
+.ai-prompt-bridge-onenote-export td {
   border: 1px solid #d1d5db;
-  padding: 6px 8px;
+  padding: 8px 10px;
   vertical-align: top;
 }
-th {
+.ai-prompt-bridge-onenote-export th {
   background: #f3f4f6;
   font-weight: 700;
 }
-pre {
+.ai-prompt-bridge-onenote-export pre {
   white-space: pre-wrap;
   background: #f8fafc;
   border: 1px solid #e5e7eb;
-  padding: 8px;
-  border-radius: 4px;
+  padding: 10px;
+  border-radius: 6px;
+  font-size: 16pt;
+  line-height: 1.45;
 }
-code {
+.ai-prompt-bridge-onenote-export code {
   font-family: Consolas, "Courier New", monospace;
   background: #f3f4f6;
-  padding: 1px 3px;
+  padding: 1px 4px;
+  font-size: 16pt;
 }
-blockquote {
-  border-left: 3px solid #d1d5db;
-  margin: 8px 0;
-  padding-left: 10px;
+.ai-prompt-bridge-onenote-export pre code {
+  font-size: 16pt;
+  background: transparent;
+  padding: 0;
+}
+.ai-prompt-bridge-onenote-export blockquote {
+  border-left: 4px solid #d1d5db;
+  margin: 10px 0;
+  padding-left: 12px;
   color: #374151;
+}
+.ai-prompt-bridge-onenote-export hr {
+  border: 0;
+  border-top: 1px solid #d1d5db;
+  margin: 16px 0;
 }
 </style>
 </head>
 <body>
+<div class="ai-prompt-bridge-onenote-export" style="font-family:'Microsoft JhengHei','Segoe UI',Calibri,'Noto Sans TC',Arial,sans-serif;font-size:20pt;line-height:1.6;color:#111111;background:#ffffff;">
 ${body}
+</div>
 </body>
 </html>`;
     }
@@ -1334,6 +1428,7 @@ ${body}
             return;
         }
 
+        applyOneNoteInlineStyles(clone);
         const htmlContent = normalizeRichHtml(clone.innerHTML || `<pre>${escapeHtml(textContent)}</pre>`);
 
         try {
@@ -1344,7 +1439,7 @@ ${body}
                         "text/plain": new Blob([textContent], { type: "text/plain" })
                     })
                 ]);
-                toast(`已複製 Word / OneNote 富文本格式（${textContent.length} 字）`);
+                toast(`已複製 OneNote 富文本：內文 20pt、標題保留原大小（${textContent.length} 字）`);
                 return;
             }
         } catch (error) {

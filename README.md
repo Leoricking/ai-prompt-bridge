@@ -1,4 +1,4 @@
-# AI Prompt Bridge v1.8
+# AI Prompt Bridge v1.10
 
 AI Prompt Bridge 是一個 Tampermonkey userscript，用來在 ChatGPT、Gemini、Claude、DeepSeek、Perplexity、Qwen、Cursor 等頁面之間快速搬運內容、生成 review prompt、生成 Cursor fix prompt、整理筆記，以及複製 Word / OneNote 可用的乾淨富文本。
 
@@ -317,4 +317,161 @@ git commit -m "chore: remove private project presets from public build" -m "- Re
 - Replace private presets with generic public-safe templates.
 - Keep project-aware prompt injection while avoiding exposure of private repositories.
 - Update README with public-safe usage, privacy guidance, and generic project contexts."
+```
+
+---
+
+## v1.9：OneNote 20pt 舒適字體輸出
+
+v1.9 針對 OneNote / Word 富文本貼上做字體改善。
+
+### 為什麼 OneNote 貼上字體常常太小？
+
+OneNote 是「無限畫布」設計，不像 Word 以 A4 紙張為中心。它常用 10.5pt～11pt 作為預設字體，這在 2K / 4K 螢幕上會顯得太小。從網頁貼入 HTML 時，OneNote 又會優先採用剪貼簿裡的 HTML 樣式，所以只改 OneNote 預設字型不一定能影響外部貼上的內容。
+
+因此 v1.9 在 `Alt+W` 與 `Alt+Shift+W` 複製 HTML 時，直接注入 OneNote 友善的大字體樣式。
+
+---
+
+### v1.9 字體規則
+
+```text
+一般內文：20pt
+大標題 H1/H2/H3/H4：維持來源原本大小，不再強制放大
+code / pre：16pt
+行高：1.6
+字體：Microsoft JhengHei / Segoe UI / Calibri / Noto Sans TC
+```
+
+---
+
+### 影響範圍
+
+這些功能會使用 20pt 富文本：
+
+```text
+Alt+W：複製單段 / 選取內容到 Word / OneNote
+Alt+Shift+W：複製整個 session 到 Word / OneNote
+```
+
+不受影響：
+
+```text
+Alt+C：仍保留純文字 / AI 搬運用途
+Alt+S：仍保留純文字 session 備份用途
+Alt+N：仍是產生筆記整理 prompt
+Alt+V：仍是 Cursor fix prompt
+```
+
+---
+
+### 使用方式
+
+```text
+1. 在 ChatGPT / Gemini / Claude / DeepSeek 頁面
+2. 選取要複製的內容，或不選取直接抓最後一段回答
+3. 按 Alt+W
+4. 到 OneNote / Word Ctrl+V
+```
+
+完整 session：
+
+```text
+1. 先往上捲動，讓舊訊息載入
+2. 按 Alt+Shift+W
+3. 到 OneNote / Word Ctrl+V
+```
+
+---
+
+### OneNote 本身也可以調整
+
+如果你希望自己手動輸入的字也變大，可以在 OneNote：
+
+```text
+檔案
+→ 選項
+→ 一般
+→ 預設字型
+→ 大小改成 18 或 20
+```
+
+但這只影響 OneNote 自己的新輸入內容。從網頁貼上的 HTML 仍會以剪貼簿 HTML 樣式為主，所以 v1.9 的 20pt HTML 注入仍然必要。
+
+---
+
+## v1.9 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "feat: improve OneNote rich-text font size" -m "- Set Word / OneNote rich-text exports to a 20pt readable default font size.
+- Add larger heading sizes and comfortable line-height for pasted AI content.
+- Apply inline styles to improve OneNote compatibility.
+- Keep Alt+C and Alt+S plain-text workflows unchanged.
+- Update README with OneNote font behavior and v1.9 usage notes."
+```
+
+---
+
+## v1.10：保留大標題原本大小，只放大內文字體
+
+v1.10 修正 v1.9 的字體策略：
+
+```text
+v1.9：內文 20pt，H1/H2/H3/H4 也被強制放大
+v1.10：內文 / 小字體改成 20pt，大標題維持原本大小
+```
+
+### 為什麼要這樣改？
+
+貼到 OneNote 時，最需要改善的是：
+
+```text
+一般段落太小
+清單太小
+表格文字太小
+span / div 小字太小
+```
+
+但 ChatGPT / Gemini 原本的大標題通常已經夠大，如果再強制變成 30pt / 26pt，貼到 OneNote 會顯得過大、版面不平衡。
+
+所以 v1.10 改成：
+
+```text
+一般內文：20pt
+清單：20pt
+表格：20pt
+span / div 小字：20pt
+code / pre：16pt
+大標題 H1/H2/H3/H4/H5/H6：不強制指定 font-size，盡量保留來源大小
+```
+
+### 影響範圍
+
+```text
+Alt+W：單段 / 選取內容富文本
+Alt+Shift+W：整個 session 富文本
+```
+
+不影響：
+
+```text
+Alt+C
+Alt+S
+Alt+N
+Alt+V
+Project Context
+面板拖曳
+```
+
+---
+
+## v1.10 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "fix: preserve heading sizes in OneNote rich text export" -m "- Keep original heading font sizes when copying rich text to Word / OneNote.
+- Enlarge normal body text, list items, table cells, divs, and spans to 20pt.
+- Keep code and preformatted blocks at 16pt for readability.
+- Update README with v1.10 OneNote typography behavior."
 ```
