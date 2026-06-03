@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         AI Prompt Bridge
 // @namespace    https://ai-prompt-bridge.local/ai-prompt-bridge
-// @version      1.10.0
-// @description  Cross-AI prompt bridge for ChatGPT, Gemini, Claude, DeepSeek, Qwen, Perplexity and Cursor workflows. Keeps original heading sizes while enlarging small body text to 20pt for OneNote.
+// @version      1.11.0
+// @description  Cross-AI prompt bridge for ChatGPT, Gemini, Claude, DeepSeek, Qwen, Perplexity and Cursor workflows. Makes Alt+S one-click full-session OneNote rich copy with 20pt body text and preserved title sizes.
 // @author       Rossi
 // @match        https://chatgpt.com/*
 // @match        https://chat.openai.com/*
@@ -30,7 +30,7 @@
 (function () {
     "use strict";
 
-    const AI_PROMPT_BRIDGE_VERSION = "1.10.0";
+    const AI_PROMPT_BRIDGE_VERSION = "1.11.0";
     console.log("[AI Prompt Bridge] injected", AI_PROMPT_BRIDGE_VERSION, location.href);
 
     function showStartupProbe() {
@@ -66,13 +66,13 @@
         }
     }
 
-    const STORAGE_KEY = "ai_prompt_bridge_payload_v110";
-    const PANEL_POS_KEY = "ai_prompt_bridge_panel_position_v110";
-    const PANEL_ID = "ai-prompt-bridge-panel-v110";
-    const BUBBLE_ID = "ai-prompt-bridge-restore-bubble-v110";
-    const COLLAPSED_KEY = "ai_prompt_bridge_collapsed_v110";
-    const HIDDEN_KEY = "ai_prompt_bridge_hidden_v110";
-    const PROJECT_KEY = "ai_prompt_bridge_project_key_v110";
+    const STORAGE_KEY = "ai_prompt_bridge_payload_v111";
+    const PANEL_POS_KEY = "ai_prompt_bridge_panel_position_v111";
+    const PANEL_ID = "ai-prompt-bridge-panel-v111";
+    const BUBBLE_ID = "ai-prompt-bridge-restore-bubble-v111";
+    const COLLAPSED_KEY = "ai_prompt_bridge_collapsed_v111";
+    const HIDDEN_KEY = "ai_prompt_bridge_hidden_v111";
+    const PROJECT_KEY = "ai_prompt_bridge_project_key_v111";
 
     const PROJECTS = {
         auto: {
@@ -1135,6 +1135,10 @@
         return clone;
     }
 
+    async function copyFullSessionRawText() {
+        await captureFullSession();
+    }
+
     async function copyFullSessionRichTextForOffice() {
         const sessionRoot = getSessionRootElement();
 
@@ -1795,7 +1799,7 @@ ${body}
         content.appendChild(createButton("⑦ 複製整個 Session Alt+S", captureFullSession, "#be123c"));
         content.appendChild(createButton("⑨ 整理成 OneNote 筆記 Alt+N", () => copyPrompt(buildOneNotePrompt, "已複製 OneNote 筆記整理 Prompt"), "#d97706"));
         content.appendChild(createButton("⑩ 複製 Word/OneNote 格式 Alt+W", copyRichTextForOffice, "#0891b2"));
-        content.appendChild(createButton("⑪ 複製整頁 Word/OneNote Alt+Shift+W", copyFullSessionRichTextForOffice, "#0e7490"));
+        content.appendChild(createButton("⑪ 一鍵複製 Session 到 OneNote Alt+S", copyFullSessionRichTextForOffice, "#0e7490"));
         content.appendChild(createButton("⑧ 重置面板位置", async () => {
             const p = document.getElementById(PANEL_ID);
             if (p) {
@@ -1806,7 +1810,7 @@ ${body}
         }, "#0f766e"));
 
         const hint = document.createElement("div");
-        hint.textContent = "Alt+C 原文 / Alt+S session / Alt+W 單段格式 / Alt+Shift+W 整頁格式";
+        hint.textContent = "Alt+C 原文 / Alt+S 整頁到 OneNote / Alt+Shift+S 原文 / Alt+W 單段格式";
         hint.style.fontSize = "11px";
         hint.style.color = "#d1d5db";
         hint.style.marginTop = "2px";
@@ -1856,9 +1860,14 @@ ${body}
             await copyPrompt(buildCursorFix, "已複製 Cursor Fix Prompt");
         }
 
+        if (event.altKey && event.shiftKey && !event.ctrlKey && key === "s") {
+            event.preventDefault();
+            await copyFullSessionRawText();
+        }
+
         if (event.altKey && !event.shiftKey && !event.ctrlKey && key === "s") {
             event.preventDefault();
-            await captureFullSession();
+            await copyFullSessionRichTextForOffice();
         }
 
         if (event.altKey && !event.shiftKey && !event.ctrlKey && key === "n") {
@@ -1909,8 +1918,8 @@ ${body}
         GM_registerMenuCommand("Show / Reset AI Prompt Bridge Panel", async () => {
             await showPanelAtDefaultPosition();
         });
-        GM_registerMenuCommand("Copy Full Session", async () => {
-            await captureFullSession();
+        GM_registerMenuCommand("Copy Full Session Raw Text", async () => {
+            await copyFullSessionRawText();
         });
         GM_registerMenuCommand("Copy Rich Text for Word / OneNote", async () => {
             await copyRichTextForOffice();

@@ -1,4 +1,4 @@
-# AI Prompt Bridge v1.10
+# AI Prompt Bridge v1.11
 
 AI Prompt Bridge 是一個 Tampermonkey userscript，用來在 ChatGPT、Gemini、Claude、DeepSeek、Perplexity、Qwen、Cursor 等頁面之間快速搬運內容、生成 review prompt、生成 Cursor fix prompt、整理筆記，以及複製 Word / OneNote 可用的乾淨富文本。
 
@@ -474,4 +474,75 @@ git commit -m "fix: preserve heading sizes in OneNote rich text export" -m "- Ke
 - Enlarge normal body text, list items, table cells, divs, and spans to 20pt.
 - Keep code and preformatted blocks at 16pt for readability.
 - Update README with v1.10 OneNote typography behavior."
+```
+
+---
+
+## v1.11：Alt+S 一鍵複製整個 Session 到 OneNote
+
+v1.11 調整 Session 複製邏輯，讓最常用的快捷鍵 `Alt+S` 直接變成「完整 session → OneNote / Word 富文本」的一鍵輸出。
+
+### 新邏輯
+
+```text
+Alt+S：完整 session 富文本複製到 OneNote / Word
+Alt+Shift+S：完整 session 原始純文字備份
+Alt+Shift+W：完整 session 富文本複製到 OneNote / Word（保留相容快捷鍵）
+```
+
+### 字體規則
+
+```text
+一般內文：20pt
+清單：20pt
+表格文字：20pt
+span / div 小字：20pt
+code / pre：16pt
+大標題 H1/H2/H3/H4/H5/H6：維持來源原本大小，不強制放大
+```
+
+### 使用方式
+
+```text
+1. 在 ChatGPT / Gemini / Claude / DeepSeek 頁面
+2. 如果對話很長，先往上捲動讓舊訊息載入
+3. 按 Alt+S
+4. 到 OneNote / Word / Outlook / Notion
+5. Ctrl+V
+```
+
+貼上內容會自動包含：
+
+```text
+AI Session Export
+Source
+Captured At
+URL
+```
+
+### 什麼時候用 Alt+Shift+S？
+
+如果你只是要存 raw log / 原始文字到 Notepad++，用：
+
+```text
+Alt+Shift+S
+```
+
+如果你要貼到 OneNote / Word 看起來舒服，用：
+
+```text
+Alt+S
+```
+
+---
+
+## v1.11 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "feat: make Alt+S copy full session to OneNote" -m "- Make Alt+S copy the full current AI session as OneNote / Word rich text.
+- Keep body text at 20pt while preserving original heading sizes.
+- Move raw full-session text copy to Alt+Shift+S.
+- Keep Alt+Shift+W as a compatibility shortcut for full-session rich text export.
+- Update README with the v1.11 session copy workflow."
 ```
