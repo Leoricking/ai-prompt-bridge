@@ -1,4 +1,4 @@
-# AI Prompt Bridge v1.11
+# AI Prompt Bridge v1.17
 
 AI Prompt Bridge 是一個 Tampermonkey userscript，用來在 ChatGPT、Gemini、Claude、DeepSeek、Perplexity、Qwen、Cursor 等頁面之間快速搬運內容、生成 review prompt、生成 Cursor fix prompt、整理筆記，以及複製 Word / OneNote 可用的乾淨富文本。
 
@@ -478,16 +478,26 @@ git commit -m "fix: preserve heading sizes in OneNote rich text export" -m "- Ke
 
 ---
 
-## v1.11：Alt+S 一鍵複製整個 Session 到 OneNote
+## v1.12：恢復 Alt+S 原始 Session，Alt+N 改成一鍵貼 OneNote
 
-v1.11 調整 Session 複製邏輯，讓最常用的快捷鍵 `Alt+S` 直接變成「完整 session → OneNote / Word 富文本」的一鍵輸出。
-
-### 新邏輯
+v1.12 依照使用習慣重新分配快捷鍵：
 
 ```text
-Alt+S：完整 session 富文本複製到 OneNote / Word
-Alt+Shift+S：完整 session 原始純文字備份
-Alt+Shift+W：完整 session 富文本複製到 OneNote / Word（保留相容快捷鍵）
+Alt+S：保留原本功能，複製整個 session 原始純文字
+Alt+N：新的 OneNote 20pt 富文本 session，一鍵複製到 OneNote / Word
+Alt+Shift+N：保留舊的「整理成 OneNote / Markdown 筆記 Prompt」
+Alt+Shift+W：保留完整 session 富文本複製的相容快捷鍵
+```
+
+### 為什麼這樣改？
+
+`Alt+S` 原本已經形成肌肉記憶，用來保存 raw session / 貼到 Notepad++ / 交給 AI 再整理。  
+因此 v1.12 恢復 `Alt+S` 原始功能。
+
+`Alt+N` 原本是「產生 OneNote 筆記整理 Prompt」，但它和「直接複製到 OneNote」使用情境高度重疊，所以改成：
+
+```text
+Alt+N = 直接把整個 session 複製成 OneNote / Word 富文本
 ```
 
 ### 字體規則
@@ -503,46 +513,329 @@ code / pre：16pt
 
 ### 使用方式
 
-```text
-1. 在 ChatGPT / Gemini / Claude / DeepSeek 頁面
-2. 如果對話很長，先往上捲動讓舊訊息載入
-3. 按 Alt+S
-4. 到 OneNote / Word / Outlook / Notion
-5. Ctrl+V
-```
-
-貼上內容會自動包含：
-
-```text
-AI Session Export
-Source
-Captured At
-URL
-```
-
-### 什麼時候用 Alt+Shift+S？
-
-如果你只是要存 raw log / 原始文字到 Notepad++，用：
-
-```text
-Alt+Shift+S
-```
-
-如果你要貼到 OneNote / Word 看起來舒服，用：
+原始 session 備份：
 
 ```text
 Alt+S
+→ Notepad++ / raw log / ChatGPT
+→ Ctrl+V
+```
+
+整個 session 直接貼到 OneNote：
+
+```text
+Alt+N
+→ OneNote / Word / Outlook
+→ Ctrl+V
+```
+
+舊版整理筆記 Prompt：
+
+```text
+Alt+Shift+N
+→ ChatGPT 輸入框
+→ Ctrl+V
 ```
 
 ---
 
-## v1.11 Git Commit
+## v1.12 Git Commit
 
 ```bash
 git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
-git commit -m "feat: make Alt+S copy full session to OneNote" -m "- Make Alt+S copy the full current AI session as OneNote / Word rich text.
-- Keep body text at 20pt while preserving original heading sizes.
-- Move raw full-session text copy to Alt+Shift+S.
-- Keep Alt+Shift+W as a compatibility shortcut for full-session rich text export.
-- Update README with the v1.11 session copy workflow."
+git commit -m "feat: map Alt+N to OneNote full-session rich copy" -m "- Restore Alt+S as the original full-session raw text copy shortcut.
+- Make Alt+N copy the full current AI session as OneNote / Word rich text.
+- Preserve heading sizes while enlarging body text to 20pt for OneNote readability.
+- Move the old OneNote note-prompt generator to Alt+Shift+N.
+- Keep Alt+Shift+W as a compatibility shortcut for full-session rich text export."
+```
+
+---
+
+## v1.13：明確定義 Alt+N 是 Alt+W 的全 Session 加強版
+
+v1.13 主要是把功能定義整理清楚：
+
+```text
+Alt+W：單段 / 選取內容 → OneNote / Word 富文本
+Alt+N：整個 session → OneNote / Word 富文本
+Alt+S：整個 session → 原始純文字
+```
+
+### Alt+N 正式定位
+
+`Alt+N` 不是整理 Prompt。  
+`Alt+N` 是 `Alt+W` 的加強版：
+
+```text
+Alt+W = 複製單段內容到 OneNote / Word
+Alt+N = 複製整個 session 到 OneNote / Word
+```
+
+### Alt+N 輸出規則
+
+```text
+來源：目前頁面整個已載入 session
+輸出：乾淨 HTML 富文本 + 純文字備援
+貼到：OneNote / Word / Outlook / Notion / Google Docs
+內文：20pt
+清單：20pt
+表格文字：20pt
+span / div 小字：20pt
+code / pre：16pt
+大標題 H1/H2/H3/H4/H5/H6：維持來源原本大小，不強制放大
+```
+
+### Alt+S 保留原本功能
+
+`Alt+S` 仍是原本的 raw session：
+
+```text
+Alt+S
+→ 複製整個 session 原始純文字
+→ 適合貼到 Notepad++ / raw log / 再丟給 ChatGPT 整理
+```
+
+### 使用方式
+
+複製整個 session 到 OneNote：
+
+```text
+1. 在 ChatGPT / Gemini / Claude / DeepSeek 頁面
+2. 如果對話很長，先往上捲動讓舊訊息載入
+3. 按 Alt+N
+4. 到 OneNote / Word
+5. Ctrl+V
+```
+
+複製整個 session 原始純文字：
+
+```text
+1. 在 AI 頁面按 Alt+S
+2. 到 Notepad++ / ChatGPT
+3. Ctrl+V
+```
+
+---
+
+## v1.13 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "docs: clarify Alt+N full-session OneNote export" -m "- Clarify that Alt+N is the full-session enhanced version of Alt+W.
+- Keep Alt+S as the original raw full-session text copy shortcut.
+- Update panel labels and hints to distinguish raw session copy from OneNote rich-text export.
+- Document that Alt+N exports the loaded full session with 20pt body text and preserved heading sizes."
+```
+
+---
+
+## v1.14：修正 Alt+N 全 Session 擷取與圖片保留
+
+v1.14 修正 `Alt+N` 和 `Alt+W` 的差異問題。
+
+### 問題原因
+
+之前的 `Alt+N` 使用過度保守的 transcript selector，可能只抓到部分訊息，導致看起來不像完整 session。  
+而某些 fallback 會抓到整個頁面 root，導致 sidebar、聊天列表、非對話區一起被帶進去。
+
+### v1.14 修正
+
+```text
+1. ChatGPT 優先使用 [data-message-author-role] 逐則抓 user / assistant 訊息。
+2. 不再用整個頁面 root 當主要來源，避免 sidebar 被一起複製。
+3. 每則訊息會加上 User / Assistant 區塊標題。
+4. Alt+N 會複製目前已載入 DOM 的整個 session。
+5. 若對話很長，仍需先往上捲動讓舊訊息載入。
+```
+
+### 圖片支援
+
+`Alt+W` 與 `Alt+N` 會保留 HTML 內的 `<img>` 標籤，並把圖片來源轉成絕對 URL。
+
+但要注意：
+
+```text
+1. Word / OneNote 是否能真的貼出圖片，取決於該圖片 URL 是否可被 OneNote / Word 讀取。
+2. 如果圖片是 blob:、受權限保護、需要登入 token、或被 CORS 限制，OneNote / Word 可能只貼文字或空白。
+3. ChatGPT 生成圖有時候是受保護下載連結，瀏覽器看得到，不代表 OneNote 一定能直接嵌入。
+4. 最穩方式仍是圖片另存後再插入 OneNote。
+```
+
+### 快捷鍵定義
+
+```text
+Alt+W：單段 / 選取內容 → OneNote / Word 富文本，會嘗試保留圖片
+Alt+N：整個已載入 session → OneNote / Word 富文本，會嘗試保留圖片
+Alt+S：整個 session 原始純文字
+```
+
+---
+
+## v1.14 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "fix: improve full-session rich text extraction" -m "- Fix Alt+N full-session export to collect ChatGPT user and assistant messages via data-message-author-role.
+- Avoid copying sidebar and non-conversation UI into rich session exports.
+- Preserve image tags in Alt+W and Alt+N rich-text exports when browser clipboard allows it.
+- Add source URL normalization for images and document image-copy limitations.
+- Update README with full-session extraction and image handling notes."
+```
+
+---
+
+## v1.15：修正 Alt+W 單段複製與圖片 / 連結保留
+
+v1.15 修正 `Alt+W` 看起來內容不完整的問題。
+
+### 問題原因
+
+`Alt+W` 是單段 / 選取內容富文本複製，不是整個 session。  
+但舊版在 ChatGPT 頁面抓最新 assistant 訊息時，可能只抓 `.markdown` 文字區，導致圖片卡片、下載卡片、按鈕式連結被排除。
+
+另外，舊版清理 HTML 時會直接移除所有 `button`，這會誤刪某些 AI 平台用 button 包裝的檔案卡片 / 下載卡片。
+
+### v1.15 修正
+
+```text
+1. ChatGPT 的 Alt+W 優先抓完整 assistant 訊息容器，而不是只抓 .markdown。
+2. 清理 HTML 前先保留有意義的 button 文字、連結與圖片。
+3. text/plain 備援內容會補上連結 URL 與圖片標記。
+4. Alt+W / Alt+N 都會嘗試保留 <img>。
+```
+
+### 圖片限制
+
+`Alt+W` / `Alt+N` 會嘗試保留圖片，但是否能貼進 OneNote / Word 取決於圖片來源：
+
+```text
+可成功：公開圖片 URL、一般 https 圖片
+可能失敗：blob: 圖片、需登入 token 的圖片、ChatGPT 受保護生成圖、CORS / 權限限制圖片
+```
+
+最穩方式仍是圖片另存後再插入 OneNote。
+
+---
+
+## v1.15 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "fix: preserve links and images in rich copy" -m "- Make Alt+W prefer the full ChatGPT assistant message container instead of markdown-only content.
+- Preserve meaningful button-based cards before removing utility buttons.
+- Add link URLs and image markers to plain-text clipboard fallback.
+- Keep image tags and normalize image URLs for Word / OneNote rich-text paste.
+- Update README with Alt+W behavior and image-copy limitations."
+```
+
+---
+
+## v1.16：修正 Alt+S 沒反應
+
+v1.16 修正 `Alt+S` 沒反應的問題。
+
+### 問題原因
+
+v1.12～v1.15 期間，`Alt+S` 已經被重新定義為「原本的完整 session 原始純文字」，但是腳本內部缺少 `copyFullSessionRawText()` 包裝函式，導致快捷鍵觸發時會在 Console 出現 `ReferenceError`，看起來就像完全沒反應。
+
+### v1.16 修正
+
+```text
+1. 補回 copyFullSessionRawText()，內部呼叫 captureFullSession()
+2. Alt+S 恢復為完整 session 原始純文字
+3. Alt+N 維持為完整 session → OneNote / Word 富文本
+4. keydown 改成 capture phase，提高快捷鍵被頁面攔截前觸發的機率
+5. 增加 event.code fallback，避免不同鍵盤語系下 event.key 判斷失效
+6. Tampermonkey 選單新增 Test Shortcut / Copy Raw Session Now，方便排查
+```
+
+### 快捷鍵
+
+```text
+Alt+S：完整 session 原始純文字
+Alt+N：完整 session → OneNote / Word 富文本
+Alt+W：單段 / 選取內容 → OneNote / Word 富文本
+Alt+C：單段原文 / AI 搬運暫存
+```
+
+### 如果 Alt+S 還是沒反應
+
+請在 ChatGPT 頁面點 Tampermonkey 圖示，選：
+
+```text
+Test Shortcut / Copy Raw Session Now
+```
+
+如果選單可以複製，代表腳本正常，是瀏覽器或網站攔截快捷鍵。  
+如果選單也不能複製，請開 F12 → Console 看錯誤訊息。
+
+---
+
+## v1.16 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "fix: restore Alt+S raw session copy" -m "- Add the missing copyFullSessionRawText wrapper for full-session raw text export.
+- Restore Alt+S as the original raw full-session copy shortcut.
+- Keep Alt+N as the full-session OneNote / Word rich-text export.
+- Improve shortcut reliability with capture-phase keydown handling and event.code fallback.
+- Add a Tampermonkey menu command for raw session copy testing."
+```
+
+---
+
+## v1.17：清理 Alt+S / Alt+V 不必要文字
+
+v1.17 修正 `Alt+S` 和 `Alt+V` 會生成不必要文字的問題。
+
+### 修正原因
+
+舊版 `Alt+S` 會在 structured transcript 和 generic page text 之間選比較長的內容。  
+ChatGPT 頁面的 generic text 很容易包含：
+
+```text
+左側 sidebar
+聊天歷史
+導覽選單
+AI Prompt Bridge 面板文字
+Project Context 下拉選單
+頁面提示文字
+```
+
+這導致 `Alt+S` 複製出一大段非對話內容，`Alt+V` 再包裝這些暫存內容時，也會一起把雜訊帶進 Cursor prompt。
+
+### v1.17 修正
+
+```text
+1. Alt+S 優先使用 structured transcript，不再因為 generic text 比較長就改抓整頁。
+2. ChatGPT 使用 data-message-author-role 抓 user / assistant 對話。
+3. generic fallback 會移除 sidebar、nav、header、footer、composer、AI Prompt Bridge 面板。
+4. Alt+S 不再自動加 # Full Session Export / Source / Captured_At / URL header。
+5. Alt+V 預設不再注入 Source / Captured_At / URL。
+6. Project Context 只有在手動選擇具體 preset 時才會注入。
+7. Auto Detect 不再掃描整個 body，避免被 AI Prompt Bridge 面板文字誤判成 Python GUI / Media Tool。
+8. Alt+V prompt 縮短，只保留必要 Cursor 修正要求。
+```
+
+### 快捷鍵保持不變
+
+```text
+Alt+S：完整 session 原始純文字
+Alt+V：把暫存內容轉成 Cursor Fix Prompt
+Alt+N：完整 session → OneNote / Word 富文本
+Alt+W：單段 / 選取內容 → OneNote / Word 富文本
+```
+
+---
+
+## v1.17 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "fix: clean noisy session and cursor prompts" -m "- Make Alt+S prefer structured transcripts instead of longer generic page text.
+- Remove sidebar, navigation, composer, and AI Prompt Bridge panel text from fallback session exports.
+- Stop adding export metadata headers to raw Alt+S session copies.
+- Keep Project Context out of prompts unless a concrete preset is manually selected.
+- Simplify Alt+V Cursor Fix prompt to avoid unnecessary Source, URL, and auto-detected project text."
 ```

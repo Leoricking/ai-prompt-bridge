@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         AI Prompt Bridge
 // @namespace    https://ai-prompt-bridge.local/ai-prompt-bridge
-// @version      1.11.0
-// @description  Cross-AI prompt bridge for ChatGPT, Gemini, Claude, DeepSeek, Qwen, Perplexity and Cursor workflows. Makes Alt+S one-click full-session OneNote rich copy with 20pt body text and preserved title sizes.
+// @version      1.17.0
+// @description  Cross-AI prompt bridge for ChatGPT, Gemini, Claude, DeepSeek, Qwen, Perplexity and Cursor workflows. Removes noisy sidebar/panel text from Alt+S and reduces unnecessary Alt+V prompt headers.
 // @author       Rossi
 // @match        https://chatgpt.com/*
 // @match        https://chat.openai.com/*
@@ -30,7 +30,7 @@
 (function () {
     "use strict";
 
-    const AI_PROMPT_BRIDGE_VERSION = "1.11.0";
+    const AI_PROMPT_BRIDGE_VERSION = "1.17.0";
     console.log("[AI Prompt Bridge] injected", AI_PROMPT_BRIDGE_VERSION, location.href);
 
     function showStartupProbe() {
@@ -66,13 +66,13 @@
         }
     }
 
-    const STORAGE_KEY = "ai_prompt_bridge_payload_v111";
-    const PANEL_POS_KEY = "ai_prompt_bridge_panel_position_v111";
-    const PANEL_ID = "ai-prompt-bridge-panel-v111";
-    const BUBBLE_ID = "ai-prompt-bridge-restore-bubble-v111";
-    const COLLAPSED_KEY = "ai_prompt_bridge_collapsed_v111";
-    const HIDDEN_KEY = "ai_prompt_bridge_hidden_v111";
-    const PROJECT_KEY = "ai_prompt_bridge_project_key_v111";
+    const STORAGE_KEY = "ai_prompt_bridge_payload_v117";
+    const PANEL_POS_KEY = "ai_prompt_bridge_panel_position_v117";
+    const PANEL_ID = "ai-prompt-bridge-panel-v117";
+    const BUBBLE_ID = "ai-prompt-bridge-restore-bubble-v117";
+    const COLLAPSED_KEY = "ai_prompt_bridge_collapsed_v117";
+    const HIDDEN_KEY = "ai_prompt_bridge_hidden_v117";
+    const PROJECT_KEY = "ai_prompt_bridge_project_key_v117";
 
     const PROJECTS = {
         auto: {
@@ -488,20 +488,49 @@
         return rows.join("\n\n---\n\n");
     }
 
+    function cleanGenericSessionElement(element) {
+        const clone = element.cloneNode(true);
+        [
+            `#${PANEL_ID}`,
+            `#${BUBBLE_ID}`,
+            "#ai-prompt-bridge-startup-probe",
+            "aside",
+            "nav",
+            "header",
+            "footer",
+            "form",
+            "textarea",
+            "input",
+            "select",
+            "button",
+            "script",
+            "style",
+            "noscript",
+            "[contenteditable='true']",
+            "[data-testid*='sidebar']",
+            "[data-testid*='composer']"
+        ].forEach((selector) => {
+            try {
+                clone.querySelectorAll(selector).forEach((el) => el.remove());
+            } catch (_) {}
+        });
+        return clone;
+    }
+
     function getGenericSession() {
         const candidates = [
-            document.querySelector("main"),
-            document.querySelector('[role="main"]'),
             document.querySelector('[data-testid*="conversation"]'),
             document.querySelector(".conversation"),
             document.querySelector(".chat"),
-            document.body
+            document.querySelector("main"),
+            document.querySelector('[role="main"]')
         ].filter(Boolean);
 
         let best = "";
 
         candidates.forEach((element) => {
-            const text = normalizeText(element.innerText || element.textContent || "");
+            const cleaned = cleanGenericSessionElement(element);
+            const text = normalizeText(cleaned.innerText || cleaned.textContent || "");
             if (text.length > best.length) {
                 best = text;
             }
@@ -509,6 +538,7 @@
 
         return best;
     }
+
 
     function getCurrentSessionText() {
         const site = getSiteName();
@@ -520,28 +550,15 @@
         if (site === "DeepSeek") structuredContent = getDeepSeekSession();
         if (site === "Perplexity") structuredContent = getPerplexitySession();
 
-        const genericContent = getGenericSession();
-
-        // Use the longer result because some AI sites virtualize or change message selectors.
-        // Manual Ctrl+A often follows the rendered page text, which is closer to genericContent.
-        let content = structuredContent;
-        if (genericContent && genericContent.length > structuredContent.length * 1.25) {
-            content = genericContent;
+        // Alt+S should be a clean raw transcript, not Ctrl+A of the whole page.
+        // Generic page text often includes sidebar, history list, model picker, and AI Prompt Bridge panel.
+        if (structuredContent && structuredContent.length >= 20) {
+            return normalizeText(structuredContent);
         }
 
-        if (!content) {
-            content = genericContent || structuredContent;
-        }
-
-        const header = [
-            `# Full Session Export`,
-            `Source: ${site}`,
-            `Captured_At: ${nowText()}`,
-            `URL: ${location.href}`
-        ].join("\n");
-
-        return normalizeText(`${header}\n\n${content}`);
+        return normalizeText(getGenericSession());
     }
+
 
     async function gmSet(key, value) {
         const result = GM_setValue(key, value);
@@ -589,12 +606,14 @@
     }
 
     function getProjectTextSource(payload = null) {
+        // Do not scan the whole page body here.
+        // The bridge panel itself contains project keywords and can cause false auto-detect.
         return [
             safeText(document.title),
-            safeText(document.body?.innerText).slice(0, 9000),
             safeText(payload?.content).slice(0, 12000)
         ].join(" ").toLowerCase();
     }
+
 
     function detectCurrentProjectKey(payload = null) {
         const text = getProjectTextSource(payload);
@@ -622,12 +641,20 @@
     }
 
     function buildProjectContext(payload = null) {
+        // Keep prompts clean by default.
+        // Only inject project context when user manually selects a concrete preset.
+        if (!selectedProjectKey || selectedProjectKey === "auto" || selectedProjectKey === "generic") {
+            return "";
+        }
+
         const key = getActiveProjectKey(payload);
         const project = getActiveProject(payload);
-        const mode = selectedProjectKey === "auto" ? `auto-detect:${key}` : `manual:${key}`;
+        if (!project || key === "auto" || key === "generic") {
+            return "";
+        }
 
         return [
-            `Project_Mode: ${mode}`,
+            `Project_Mode: manual:${key}`,
             `Project_Name: ${project.name}`,
             project.path ? `Project_Path: ${project.path}` : "",
             `Tech_Stack: ${project.techStack}`,
@@ -637,18 +664,19 @@
         ].filter(Boolean).join("\n");
     }
 
+
     function makeHeader(payload, projectPathOverride = "") {
         const projectContext = buildProjectContext(payload);
         const overrideLine = projectPathOverride ? `Project_Path_Override: ${projectPathOverride}` : "";
 
+        // Source / timestamp / URL are intentionally omitted from generated prompts by default.
+        // They are useful for logs, but noisy for Alt+V / review prompts.
         return [
-            `Source: ${payload?.source || getSiteName()}`,
-            `Captured_At: ${payload?.createdAt || nowText()}`,
-            payload?.sourceUrl ? `Source_URL: ${payload.sourceUrl}` : "",
             projectContext,
             overrideLine
         ].filter(Boolean).join("\n");
     }
+
 
     function createProjectSelector() {
         const wrapper = document.createElement("div");
@@ -742,32 +770,27 @@
 
     function buildCursorFix(payload) {
         const content = payload?.content || "";
+        const header = makeHeader(payload);
 
         return [
-            makeHeader(payload),
+            header,
+            header ? "" : "",
+            "請根據以下內容修正目前 Cursor 專案。",
             "",
-            "請根據以下多模型結論修正目前 Cursor 專案。請務必套用上方 Project_Context：Project_Path、Tech_Stack、Critical_Rules、Test_Commands、Docs_Targets。",
+            "要求：",
+            "1. 只做最小必要修改。",
+            "2. 原本可用功能不可被改壞。",
+            "3. 不可提供簡化版、閹割版、回退版。",
+            "4. 若需要改程式碼，請以目前專案完整檔案為基準，提供完整可覆蓋版本。",
+            "5. 請列出修改檔案、測試方式與可能 regression 風險。",
             "",
-            "最高原則：",
-            "1. 原本可用功能不可被改壞。",
-            "2. 只針對指定異常做最小範圍修正。",
-            "3. 不可刪除既有功能。",
-            "4. 不可提供簡化版、閹割版、回退版。",
-            "5. 必須以目前專案現有完整檔案為基準修改。",
-            "6. 若提供程式碼，必須提供完整檔案，可直接覆蓋。",
-            "",
-            "請先列出：",
-            "1. 需要修改的檔案",
-            "2. 最小修改策略",
-            "3. 可能 regression 風險",
-            "4. 測試方式",
-            "",
-            "多模型結論 / 暫存內容：",
+            "內容：",
             "```text",
             content,
             "```"
-        ].join("\n");
+        ].filter((line) => line !== null && line !== undefined).join("\n");
     }
+
 
     function buildRule(payload) {
         const content = payload?.content || "";
@@ -894,8 +917,9 @@
 
         if (site === "ChatGPT") {
             selectors = [
-                '[data-message-author-role="assistant"] .markdown',
                 '[data-message-author-role="assistant"]',
+                '[data-message-author-role="assistant"] .markdown',
+                ".agent-turn",
                 ".agent-turn .markdown",
                 ".markdown"
             ];
@@ -960,128 +984,75 @@
     }
 
 
-    function getSessionRootElement() {
-        const site = getSiteName();
-        let selectors = [];
+    function absolutizeImageSources(root) {
+        try {
+            root.querySelectorAll("img").forEach((img, index) => {
+                const src = img.getAttribute("src") || img.src || "";
+                if (!src) return;
 
-        if (site === "ChatGPT") {
-            selectors = [
-                "main",
-                '[role="main"]',
-                '[data-testid*="conversation"]',
-                ".conversation"
-            ];
-        } else if (site === "Gemini") {
-            selectors = [
-                "main",
-                '[role="main"]',
-                ".conversation-container",
-                "bard-sidenav-content",
-                "chat-window"
-            ];
-        } else if (site === "Claude") {
-            selectors = [
-                "main",
-                '[role="main"]',
-                ".conversation",
-                "[class*='conversation']"
-            ];
-        } else if (site === "DeepSeek") {
-            selectors = [
-                "main",
-                '[role="main"]',
-                "[class*='chat']",
-                "[class*='conversation']"
-            ];
-        } else if (site === "Perplexity") {
-            selectors = [
-                "main",
-                '[role="main"]',
-                "[class*='thread']",
-                "[class*='answer']"
-            ];
-        } else {
-            selectors = [
-                "main",
-                '[role="main"]',
-                "article",
-                ".prose",
-                ".markdown",
-                "body"
-            ];
+                try {
+                    img.setAttribute("src", new URL(src, location.href).href);
+                } catch (_) {
+                    img.setAttribute("src", src);
+                }
+
+                img.setAttribute("alt", img.getAttribute("alt") || `AI image ${index + 1}`);
+                img.setAttribute("style", [
+                    "max-width:100%",
+                    "height:auto",
+                    "display:block",
+                    "margin:10px 0",
+                    "border:0"
+                ].join(";"));
+            });
+        } catch (error) {
+            console.warn("[AI Prompt Bridge] image source normalization failed", error);
         }
-
-        const candidates = [];
-
-        selectors.forEach((selector) => {
-            try {
-                document.querySelectorAll(selector).forEach((element) => {
-                    const text = normalizeText(element.innerText || element.textContent || "");
-                    if (text.length > 50) {
-                        candidates.push({
-                            element,
-                            textLength: text.length
-                        });
-                    }
-                });
-            } catch (error) {
-                console.warn("[AI Prompt Bridge] session selector failed", selector, error);
-            }
-        });
-
-        if (candidates.length === 0) {
-            return document.body || document.documentElement;
-        }
-
-        candidates.sort((a, b) => b.textLength - a.textLength);
-        return candidates[0].element;
+        return root;
     }
 
-    function pruneRichSessionClone(clone) {
-        const site = getSiteName();
+    function getRoleLabel(role) {
+        if (role === "user") return "User";
+        if (role === "assistant") return "Assistant";
+        return role || "Message";
+    }
 
-        const removeSelectors = [
-            `#${PANEL_ID}`,
-            `#${BUBBLE_ID}`,
-            "#ai-prompt-bridge-startup-probe",
-            "aside",
-            "nav",
-            "header",
-            "footer",
-            "form",
-            "textarea",
-            "input",
-            "select",
-            "button",
-            "svg",
-            "script",
-            "style",
-            "noscript",
-            "[contenteditable='true']",
-            "[data-testid*='sidebar']",
-            "[data-testid*='composer']",
-            "[data-testid*='copy']",
-            "[aria-label*='Copy']",
-            "[aria-label*='複製']",
-            "[aria-label*='Send']",
-            "[aria-label*='送出']",
-            ".copy-button",
-            ".code-copy-button",
-            ".sr-only"
-        ];
+    function createTranscriptBlock(role, sourceNode, index) {
+        const section = document.createElement("section");
+        section.setAttribute("data-ai-prompt-bridge-message", String(index + 1));
+        section.setAttribute("style", "margin:14px 0;padding:10px 0;border-bottom:1px solid #e5e7eb;");
 
-        removeSelectors.forEach((selector) => {
-            try {
-                clone.querySelectorAll(selector).forEach((el) => el.remove());
-            } catch (_) {}
+        const heading = document.createElement("h2");
+        heading.textContent = `${index + 1}. ${getRoleLabel(role)}`;
+        heading.setAttribute("style", "font-weight:700;margin:10px 0 8px;color:#111111;");
+        section.appendChild(heading);
+
+        const body = cleanRichClone(sourceNode);
+        absolutizeImageSources(body);
+        applyOneNoteInlineStyles(body);
+        section.appendChild(body);
+
+        return section;
+    }
+
+    function collectChatGPTTranscriptNodes() {
+        const nodes = [];
+        document.querySelectorAll('[data-message-author-role]').forEach((node) => {
+            const role = node.getAttribute("data-message-author-role") || "";
+            if (!["user", "assistant", "tool"].includes(role)) return;
+
+            const text = normalizeText(node.innerText || node.textContent || "");
+            const hasImage = node.querySelector("img");
+            if (text.length < 2 && !hasImage) return;
+
+            nodes.push({ role, node });
         });
+        return nodes;
+    }
 
-        const transcriptSelectorsBySite = {
-            ChatGPT: [
-                '[data-message-author-role]',
-                ".agent-turn",
-                ".markdown"
-            ],
+    function collectGenericTranscriptNodes() {
+        const site = getSiteName();
+        const selectorsBySite = {
             Gemini: [
                 "user-query",
                 "message-content",
@@ -1107,53 +1078,109 @@
             ]
         };
 
-        const transcriptSelectors = transcriptSelectorsBySite[site] || [];
-        const transcriptNodes = [];
+        const selectors = selectorsBySite[site] || [
+            ".markdown",
+            ".prose",
+            "[class*='message']",
+            "article"
+        ];
 
-        transcriptSelectors.forEach((selector) => {
+        const nodes = [];
+        const seen = new Set();
+
+        selectors.forEach((selector) => {
             try {
-                clone.querySelectorAll(selector).forEach((node) => {
+                document.querySelectorAll(selector).forEach((node) => {
+                    if (seen.has(node)) return;
                     const text = normalizeText(node.innerText || node.textContent || "");
-                    if (text.length > 10 && !transcriptNodes.includes(node)) {
-                        transcriptNodes.push(node);
-                    }
+                    const hasImage = node.querySelector("img");
+                    if (text.length < 10 && !hasImage) return;
+
+                    seen.add(node);
+                    nodes.push({ role: "message", node });
                 });
-            } catch (_) {}
+            } catch (error) {
+                console.warn("[AI Prompt Bridge] transcript selector failed", selector, error);
+            }
         });
 
-        if (transcriptNodes.length >= 2) {
-            const transcript = document.createElement("div");
-            transcriptNodes.forEach((node, index) => {
-                const block = document.createElement("section");
-                block.setAttribute("data-ai-prompt-bridge-message", String(index + 1));
-                block.appendChild(node.cloneNode(true));
-                transcript.appendChild(block);
+        return nodes;
+    }
+
+    function buildFullSessionTranscriptElement() {
+        const site = getSiteName();
+        let nodes = [];
+
+        if (site === "ChatGPT") {
+            nodes = collectChatGPTTranscriptNodes();
+        }
+
+        if (nodes.length < 2) {
+            nodes = collectGenericTranscriptNodes();
+        }
+
+        const transcript = document.createElement("div");
+        transcript.setAttribute("data-ai-prompt-bridge-transcript", "1");
+
+        if (nodes.length >= 1) {
+            nodes.forEach((item, index) => {
+                transcript.appendChild(createTranscriptBlock(item.role, item.node, index));
             });
             return transcript;
         }
 
-        return clone;
+        const fallbackRoot = document.querySelector("main") || document.querySelector('[role="main"]') || document.body || document.documentElement;
+        const fallback = cleanRichClone(fallbackRoot);
+        absolutizeImageSources(fallback);
+        applyOneNoteInlineStyles(fallback);
+        transcript.appendChild(fallback);
+        return transcript;
     }
 
-    async function copyFullSessionRawText() {
-        await captureFullSession();
+    function richElementToPlainText(root) {
+        const lines = [];
+        const walk = (node) => {
+            if (!node) return;
+            if (node.nodeType === Node.TEXT_NODE) {
+                const text = normalizeText(node.textContent || "");
+                if (text) lines.push(text);
+                return;
+            }
+            if (node.nodeType !== Node.ELEMENT_NODE) return;
+
+            const tag = node.tagName ? node.tagName.toLowerCase() : "";
+            if (tag === "img") {
+                const alt = node.getAttribute("alt") || "image";
+                const src = node.getAttribute("src") || "";
+                lines.push(`[Image: ${alt}${src ? " | " + src : ""}]`);
+                return;
+            }
+
+            if (tag === "a") {
+                const text = normalizeText(node.innerText || node.textContent || "");
+                const href = node.getAttribute("href") || "";
+                if (text || href) {
+                    lines.push(`${text || "Link"}${href ? " (" + href + ")" : ""}`);
+                }
+                return;
+            }
+
+            node.childNodes.forEach(walk);
+            if (["p", "div", "section", "li", "h1", "h2", "h3", "h4", "h5", "h6", "tr"].includes(tag)) {
+                lines.push("\\n");
+            }
+        };
+
+        walk(root);
+        return normalizeText(lines.join(" "));
     }
 
     async function copyFullSessionRichTextForOffice() {
-        const sessionRoot = getSessionRootElement();
-
-        if (!sessionRoot) {
-            alert("沒有找到可複製的完整 session。請確認目前頁面已有對話內容。");
-            return;
-        }
-
-        let clone = cleanRichClone(sessionRoot);
-        clone = pruneRichSessionClone(clone);
-
-        const textContent = normalizeText(clone.innerText || clone.textContent || "");
+        const transcript = buildFullSessionTranscriptElement();
+        const textContent = richElementToPlainText(transcript);
 
         if (!textContent || textContent.length < 20) {
-            alert("抓到的 session 內容太短。請先往上捲動載入舊訊息，再按 Alt+Shift+W。");
+            alert("抓到的 session 內容太短。請先往上捲動載入舊訊息，再按 Alt+N。");
             return;
         }
 
@@ -1165,8 +1192,7 @@
             `<hr>`
         ].join("");
 
-        applyOneNoteInlineStyles(clone);
-        const htmlContent = normalizeRichHtml(headerHtml + (clone.innerHTML || `<pre>${escapeHtml(textContent)}</pre>`));
+        const htmlContent = normalizeRichHtml(headerHtml + transcript.innerHTML);
 
         try {
             if (typeof ClipboardItem !== "undefined" && navigator.clipboard?.write) {
@@ -1181,11 +1207,11 @@
                                 `URL: ${location.href}`,
                                 "",
                                 textContent
-                            ].join("\n")
+                            ].join("\\n")
                         ], { type: "text/plain" })
                     })
                 ]);
-                toast(`已複製完整 Session 富文本：內文 20pt、標題保留原大小（${textContent.length} 字）`);
+                toast(`Alt+N 已複製全 Session 到 OneNote / Word（${textContent.length} 字；圖片以 HTML img 保留）`);
                 return;
             }
         } catch (error) {
@@ -1199,12 +1225,86 @@
             `URL: ${location.href}`,
             "",
             textContent
-        ].join("\n"), `已降級複製完整 Session 純文字（${textContent.length} 字）`);
+        ].join("\\n"), `已降級複製完整 Session 純文字（${textContent.length} 字）`);
     }
 
+    function isUtilityButtonText(text) {
+        const t = normalizeText(text).toLowerCase();
+        if (!t) return true;
+
+        const utilityPatterns = [
+            "copy",
+            "copied",
+            "複製",
+            "send",
+            "送出",
+            "edit",
+            "編輯",
+            "share",
+            "分享",
+            "more",
+            "更多",
+            "thumb",
+            "like",
+            "dislike",
+            "regenerate",
+            "重新產生",
+            "read aloud",
+            "朗讀",
+            "model",
+            "close",
+            "關閉"
+        ];
+
+        return utilityPatterns.some((pattern) => t === pattern || t.includes(pattern));
+    }
+
+    function preserveMeaningfulButtons(clone) {
+        try {
+            clone.querySelectorAll("button").forEach((button) => {
+                const label = normalizeText([
+                    button.innerText,
+                    button.getAttribute("aria-label"),
+                    button.getAttribute("title")
+                ].filter(Boolean).join(" "));
+
+                const links = Array.from(button.querySelectorAll("a[href]"));
+                const images = Array.from(button.querySelectorAll("img"));
+
+                const hasUsefulText = label.length >= 2 && !isUtilityButtonText(label);
+                const hasUsefulContent = links.length > 0 || images.length > 0;
+
+                if (!hasUsefulText && !hasUsefulContent) return;
+
+                const replacement = document.createElement("div");
+                replacement.setAttribute("data-ai-prompt-bridge-preserved-button", "1");
+                replacement.setAttribute("style", "margin:6px 0;");
+
+                if (links.length > 0) {
+                    links.forEach((link) => replacement.appendChild(link.cloneNode(true)));
+                }
+
+                if (images.length > 0) {
+                    images.forEach((img) => replacement.appendChild(img.cloneNode(true)));
+                }
+
+                if (hasUsefulText) {
+                    const p = document.createElement("p");
+                    p.textContent = label;
+                    replacement.appendChild(p);
+                }
+
+                button.replaceWith(replacement);
+            });
+        } catch (error) {
+            console.warn("[AI Prompt Bridge] preserve meaningful buttons failed", error);
+        }
+        return clone;
+    }
 
     function cleanRichClone(inputElement) {
         const clone = inputElement.cloneNode(true);
+        preserveMeaningfulButtons(clone);
 
         const removeSelectors = [
             "button",
@@ -1233,10 +1333,14 @@
 
         clone.querySelectorAll("*").forEach((el) => {
             el.removeAttribute("class");
-            el.removeAttribute("style");
             el.removeAttribute("data-testid");
             el.removeAttribute("aria-label");
             el.removeAttribute("role");
+
+            // Keep styles that are added by AI Prompt Bridge itself for images / preserved blocks.
+            if (!el.hasAttribute("data-ai-prompt-bridge-preserved-button") && el.tagName !== "IMG") {
+                el.removeAttribute("style");
+            }
 
             if (el.tagName === "A") {
                 const href = el.getAttribute("href");
@@ -1248,6 +1352,7 @@
             }
         });
 
+        absolutizeImageSources(clone);
         return clone;
     }
 
@@ -1425,7 +1530,8 @@ ${body}
         }
 
         const clone = cleanRichClone(targetElement);
-        const textContent = normalizeText(clone.innerText || clone.textContent || "");
+        absolutizeImageSources(clone);
+        const textContent = richElementToPlainText(clone);
 
         if (!textContent) {
             alert("抓到的內容是空的，請改用手動選取後再按 Alt+W。");
@@ -1481,6 +1587,10 @@ ${body}
         // the exporter to keep only code blocks and drop normal conversation text.
         const payload = await savePayload(text, "full-session", { preserveRaw: true });
         copyText(payload.content, `已複製完整 Session：${payload.source}（${payload.content.length} 字）`);
+    }
+
+    async function copyFullSessionRawText() {
+        await captureFullSession();
     }
 
     async function copyRawPayload() {
@@ -1797,9 +1907,10 @@ ${body}
         content.appendChild(createButton("⑤ 給 ChatGPT 轉 Cursor Alt+V", () => copyPrompt(buildCursorFix, "已複製 Cursor Fix Prompt"), "#059669"));
         content.appendChild(createButton("⑥ 變成 Cursor Rule", () => copyPrompt(buildRule, "已複製 Make Rule Prompt"), "#7c3aed"));
         content.appendChild(createButton("⑦ 複製整個 Session Alt+S", captureFullSession, "#be123c"));
-        content.appendChild(createButton("⑨ 整理成 OneNote 筆記 Alt+N", () => copyPrompt(buildOneNotePrompt, "已複製 OneNote 筆記整理 Prompt"), "#d97706"));
+        content.appendChild(createButton("⑨ Alt+N 全 Session → OneNote 20pt", copyFullSessionRichTextForOffice, "#d97706"));
+        content.appendChild(createButton("⑫ 整理成筆記 Prompt Alt+Shift+N", () => copyPrompt(buildOneNotePrompt, "已複製 OneNote 筆記整理 Prompt"), "#92400e"));
         content.appendChild(createButton("⑩ 複製 Word/OneNote 格式 Alt+W", copyRichTextForOffice, "#0891b2"));
-        content.appendChild(createButton("⑪ 一鍵複製 Session 到 OneNote Alt+S", copyFullSessionRichTextForOffice, "#0e7490"));
+        content.appendChild(createButton("⑪ 複製整頁 Word/OneNote Alt+Shift+W", copyFullSessionRichTextForOffice, "#0e7490"));
         content.appendChild(createButton("⑧ 重置面板位置", async () => {
             const p = document.getElementById(PANEL_ID);
             if (p) {
@@ -1810,7 +1921,7 @@ ${body}
         }, "#0f766e"));
 
         const hint = document.createElement("div");
-        hint.textContent = "Alt+C 原文 / Alt+S 整頁到 OneNote / Alt+Shift+S 原文 / Alt+W 單段格式";
+        hint.textContent = "Alt+C 原文 / Alt+S 原文Session / Alt+W 單段格式 / Alt+N 全Session到OneNote";
         hint.style.fontSize = "11px";
         hint.style.color = "#d1d5db";
         hint.style.marginTop = "2px";
@@ -1848,45 +1959,60 @@ ${body}
     }
 
     document.addEventListener("keydown", async (event) => {
-        const key = event.key.toLowerCase();
+        const key = (event.key || "").toLowerCase();
+        const code = event.code || "";
 
-        if (event.altKey && !event.shiftKey && !event.ctrlKey && key === "c") {
+        if (event.altKey && !event.shiftKey && !event.ctrlKey && (key === "c" || code === "KeyC")) {
             event.preventDefault();
+            event.stopPropagation();
             await captureCurrentAnswer();
         }
 
-        if (event.altKey && !event.shiftKey && !event.ctrlKey && key === "v") {
+        if (event.altKey && !event.shiftKey && !event.ctrlKey && (key === "v" || code === "KeyV")) {
             event.preventDefault();
+            event.stopPropagation();
             await copyPrompt(buildCursorFix, "已複製 Cursor Fix Prompt");
         }
 
-        if (event.altKey && event.shiftKey && !event.ctrlKey && key === "s") {
+        if (event.altKey && event.shiftKey && !event.ctrlKey && (key === "s" || code === "KeyS")) {
             event.preventDefault();
+            event.stopPropagation();
             await copyFullSessionRawText();
         }
 
-        if (event.altKey && !event.shiftKey && !event.ctrlKey && key === "s") {
+        if (event.altKey && !event.shiftKey && !event.ctrlKey && (key === "s" || code === "KeyS")) {
             event.preventDefault();
-            await copyFullSessionRichTextForOffice();
+            event.stopPropagation();
+            await copyFullSessionRawText();
         }
 
-        if (event.altKey && !event.shiftKey && !event.ctrlKey && key === "n") {
+        if (event.altKey && event.shiftKey && !event.ctrlKey && (key === "n" || code === "KeyN")) {
             event.preventDefault();
+            event.stopPropagation();
             await copyPrompt(buildOneNotePrompt, "已複製 OneNote 筆記整理 Prompt");
         }
 
-        if (event.altKey && event.shiftKey && !event.ctrlKey && key === "w") {
+        if (event.altKey && !event.shiftKey && !event.ctrlKey && (key === "n" || code === "KeyN")) {
             event.preventDefault();
+            event.stopPropagation();
             await copyFullSessionRichTextForOffice();
         }
 
-        if (event.altKey && !event.shiftKey && !event.ctrlKey && key === "w") {
+        if (event.altKey && event.shiftKey && !event.ctrlKey && (key === "w" || code === "KeyW")) {
             event.preventDefault();
+            event.stopPropagation();
+            await copyFullSessionRichTextForOffice();
+        }
+
+        if (event.altKey && !event.shiftKey && !event.ctrlKey && (key === "w" || code === "KeyW")) {
+            event.preventDefault();
+            event.stopPropagation();
             await copyRichTextForOffice();
         }
 
-        if (event.altKey && !event.shiftKey && !event.ctrlKey && key === "b") {
+        if (event.altKey && !event.shiftKey && !event.ctrlKey && (key === "b" || code === "KeyB")) {
             event.preventDefault();
+            event.stopPropagation();
 
             const panel = document.getElementById(PANEL_ID);
 
@@ -1898,8 +2024,9 @@ ${body}
             await setHidden(panel, true);
         }
 
-        if (event.altKey && !event.shiftKey && !event.ctrlKey && key === "r") {
+        if (event.altKey && !event.shiftKey && !event.ctrlKey && (key === "r" || code === "KeyR")) {
             event.preventDefault();
+            event.stopPropagation();
             await showPanelAtDefaultPosition();
         }
     });
@@ -1918,13 +2045,16 @@ ${body}
         GM_registerMenuCommand("Show / Reset AI Prompt Bridge Panel", async () => {
             await showPanelAtDefaultPosition();
         });
-        GM_registerMenuCommand("Copy Full Session Raw Text", async () => {
+        GM_registerMenuCommand("Test Shortcut / Copy Raw Session Now", async () => {
+            await copyFullSessionRawText();
+        });
+        GM_registerMenuCommand("Copy Full Session Raw Text (Alt+S)", async () => {
             await copyFullSessionRawText();
         });
         GM_registerMenuCommand("Copy Rich Text for Word / OneNote", async () => {
             await copyRichTextForOffice();
         });
-        GM_registerMenuCommand("Copy Full Session Rich Text for Word / OneNote", async () => {
+        GM_registerMenuCommand("Copy Full Session Rich Text for Word / OneNote (Alt+N)", async () => {
             await copyFullSessionRichTextForOffice();
         });
     }
