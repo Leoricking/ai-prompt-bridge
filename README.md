@@ -1,4 +1,4 @@
-# AI Prompt Bridge v1.17
+# AI Prompt Bridge v1.18
 
 AI Prompt Bridge 是一個 Tampermonkey userscript，用來在 ChatGPT、Gemini、Claude、DeepSeek、Perplexity、Qwen、Cursor 等頁面之間快速搬運內容、生成 review prompt、生成 Cursor fix prompt、整理筆記，以及複製 Word / OneNote 可用的乾淨富文本。
 
@@ -838,4 +838,58 @@ git commit -m "fix: clean noisy session and cursor prompts" -m "- Make Alt+S pre
 - Stop adding export metadata headers to raw Alt+S session copies.
 - Keep Project Context out of prompts unless a concrete preset is manually selected.
 - Simplify Alt+V Cursor Fix prompt to avoid unnecessary Source, URL, and auto-detected project text."
+```
+
+---
+
+## v1.18：修正 Alt+N / Alt+W 混淆與全 Session 提示
+
+v1.18 針對「按 Alt+N 卻只看到 125 字」這類混淆做修正。
+
+### 問題原因
+
+`Alt+W` 是單段 / 選取內容富文本複製。  
+`Alt+N` 才是完整 session 富文本複製。
+
+舊版 toast 都寫「OneNote 富文本」，看起來很像同一個功能，因此容易誤判到底觸發了 Alt+W 還是 Alt+N。
+
+### v1.18 修正
+
+```text
+1. Alt+W toast 改成：Alt+W 單段已複製到 OneNote / Word
+2. Alt+N toast 改成：Alt+N 全 Session 已複製到 OneNote / Word
+3. Alt+N 會顯示訊息數與字數，例如：8 則 / 3200 字
+4. Alt+N 強制忽略目前選取文字，只抓整個 session
+5. Alt+Shift+W 保留為全 session 富文本備用快捷鍵
+6. keydown 改成 capture phase 並使用 stopImmediatePropagation，降低被 ChatGPT / Gemini 攔截機率
+7. 面板按鈕文案改成更直覺：
+   - Alt+S 全 Session 原始純文字
+   - Alt+W 單段 → OneNote/Word 20pt
+   - Alt+N 全 Session → OneNote/Word 20pt
+```
+
+### 正確快捷鍵定義
+
+```text
+Alt+W：單段 / 選取內容 → OneNote / Word 富文本
+Alt+N：整個已載入 session → OneNote / Word 富文本
+Alt+S：整個已載入 session → 原始純文字
+```
+
+### 如果 Alt+N 顯示只抓到 1 則
+
+代表目前頁面 DOM 只載入了一則訊息，請先往上捲動讓舊訊息載入，再按 Alt+N。
+
+---
+
+## v1.18 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "fix: clarify Alt+N full-session export" -m "- Make Alt+N full-session rich export ignore current text selection.
+- Add message count and character count to full-session OneNote / Word export toast.
+- Make Alt+W toast clearly identify single-answer rich copy.
+- Update panel labels to distinguish raw session, single-answer rich copy, and full-session rich copy.
+- Improve shortcut reliability with capture-phase keydown and stopImmediatePropagation.
+- Update README with v1.18 shortcut behavior and troubleshooting notes."
 ```

@@ -1,8 +1,8 @@
-// ==UserScript==
+﻿// ==UserScript==
 // @name         AI Prompt Bridge
 // @namespace    https://ai-prompt-bridge.local/ai-prompt-bridge
-// @version      1.17.0
-// @description  Cross-AI prompt bridge for ChatGPT, Gemini, Claude, DeepSeek, Qwen, Perplexity and Cursor workflows. Removes noisy sidebar/panel text from Alt+S and reduces unnecessary Alt+V prompt headers.
+// @version      1.18.0
+// @description  Cross-AI prompt bridge for ChatGPT, Gemini, Claude, DeepSeek, Qwen, Perplexity and Cursor workflows. Makes Alt+N full-session OneNote export unmistakable, ignores selection, and improves shortcut reliability.
 // @author       Rossi
 // @match        https://chatgpt.com/*
 // @match        https://chat.openai.com/*
@@ -30,7 +30,7 @@
 (function () {
     "use strict";
 
-    const AI_PROMPT_BRIDGE_VERSION = "1.17.0";
+    const AI_PROMPT_BRIDGE_VERSION = "1.18.0";
     console.log("[AI Prompt Bridge] injected", AI_PROMPT_BRIDGE_VERSION, location.href);
 
     function showStartupProbe() {
@@ -66,13 +66,13 @@
         }
     }
 
-    const STORAGE_KEY = "ai_prompt_bridge_payload_v117";
-    const PANEL_POS_KEY = "ai_prompt_bridge_panel_position_v117";
-    const PANEL_ID = "ai-prompt-bridge-panel-v117";
-    const BUBBLE_ID = "ai-prompt-bridge-restore-bubble-v117";
-    const COLLAPSED_KEY = "ai_prompt_bridge_collapsed_v117";
-    const HIDDEN_KEY = "ai_prompt_bridge_hidden_v117";
-    const PROJECT_KEY = "ai_prompt_bridge_project_key_v117";
+    const STORAGE_KEY = "ai_prompt_bridge_payload_v118";
+    const PANEL_POS_KEY = "ai_prompt_bridge_panel_position_v118";
+    const PANEL_ID = "ai-prompt-bridge-panel-v118";
+    const BUBBLE_ID = "ai-prompt-bridge-restore-bubble-v118";
+    const COLLAPSED_KEY = "ai_prompt_bridge_collapsed_v118";
+    const HIDDEN_KEY = "ai_prompt_bridge_hidden_v118";
+    const PROJECT_KEY = "ai_prompt_bridge_project_key_v118";
 
     const PROJECTS = {
         auto: {
@@ -1175,8 +1175,18 @@
         return normalizeText(lines.join(" "));
     }
 
-    async function copyFullSessionRichTextForOffice() {
+    async function copyFullSessionRichTextForOffice(triggerName = "Alt+N") {
+        // Full-session export MUST ignore current selection.
+        // Alt+W is the only selection/single-answer rich copy shortcut.
+        try {
+            const selection = window.getSelection?.();
+            if (selection && selection.rangeCount > 0) {
+                selection.removeAllRanges();
+            }
+        } catch (_) {}
+
         const transcript = buildFullSessionTranscriptElement();
+        const messageCount = transcript.querySelectorAll("[data-ai-prompt-bridge-message]").length;
         const textContent = richElementToPlainText(transcript);
 
         if (!textContent || textContent.length < 20) {
@@ -1184,48 +1194,50 @@
             return;
         }
 
+        if (messageCount <= 1) {
+            console.warn("[AI Prompt Bridge] full-session export captured only one message. The page may not have loaded older messages yet.");
+        }
+
         const headerHtml = [
             `<h1>AI Session Export</h1>`,
             `<p><strong>Source:</strong> ${escapeHtml(getSiteName())}</p>`,
             `<p><strong>Captured At:</strong> ${escapeHtml(nowText())}</p>`,
             `<p><strong>URL:</strong> ${escapeHtml(location.href)}</p>`,
+            `<p><strong>Messages:</strong> ${messageCount || "unknown"}</p>`,
             `<hr>`
         ].join("");
 
         const htmlContent = normalizeRichHtml(headerHtml + transcript.innerHTML);
+
+        const plainText = [
+            "# AI Session Export",
+            `Source: ${getSiteName()}`,
+            `Captured_At: ${nowText()}`,
+            `URL: ${location.href}`,
+            `Messages: ${messageCount || "unknown"}`,
+            "",
+            textContent
+        ].join("\n");
 
         try {
             if (typeof ClipboardItem !== "undefined" && navigator.clipboard?.write) {
                 await navigator.clipboard.write([
                     new ClipboardItem({
                         "text/html": new Blob([htmlContent], { type: "text/html" }),
-                        "text/plain": new Blob([
-                            [
-                                "# AI Session Export",
-                                `Source: ${getSiteName()}`,
-                                `Captured_At: ${nowText()}`,
-                                `URL: ${location.href}`,
-                                "",
-                                textContent
-                            ].join("\\n")
-                        ], { type: "text/plain" })
+                        "text/plain": new Blob([plainText], { type: "text/plain" })
                     })
                 ]);
-                toast(`Alt+N 已複製全 Session 到 OneNote / Word（${textContent.length} 字；圖片以 HTML img 保留）`);
+
+                const countLabel = messageCount ? `${messageCount} 則 / ` : "";
+                const warn = messageCount <= 1 ? "（只抓到 1 則，請先往上捲動載入舊訊息）" : "";
+                toast(`${triggerName} 全 Session 已複製到 OneNote / Word：${countLabel}${textContent.length} 字${warn}`);
                 return;
             }
         } catch (error) {
             console.warn("[AI Prompt Bridge] full-session rich clipboard failed, fallback to plain text", error);
         }
 
-        await copyText([
-            "# AI Session Export",
-            `Source: ${getSiteName()}`,
-            `Captured_At: ${nowText()}`,
-            `URL: ${location.href}`,
-            "",
-            textContent
-        ].join("\\n"), `已降級複製完整 Session 純文字（${textContent.length} 字）`);
+        await copyText(plainText, `${triggerName} 已降級複製完整 Session 純文字（${messageCount || "?"} 則 / ${textContent.length} 字）`);
     }
 
     function isUtilityButtonText(text) {
@@ -1549,14 +1561,14 @@ ${body}
                         "text/plain": new Blob([textContent], { type: "text/plain" })
                     })
                 ]);
-                toast(`已複製 OneNote 富文本：內文 20pt、標題保留原大小（${textContent.length} 字）`);
+                toast(`Alt+W 單段已複製到 OneNote / Word：${textContent.length} 字`);
                 return;
             }
         } catch (error) {
             console.warn("[AI Prompt Bridge] rich clipboard failed, fallback to plain text", error);
         }
 
-        await copyText(textContent, `已降級複製純文字（${textContent.length} 字）`);
+        await copyText(textContent, `Alt+W 已降級複製純文字（${textContent.length} 字）`);
     }
 
 
@@ -1906,11 +1918,11 @@ ${body}
         content.appendChild(createButton("④ 給對方審 Code", () => copyPrompt(buildCodeReview, "已複製 Code Review Prompt"), "#374151"));
         content.appendChild(createButton("⑤ 給 ChatGPT 轉 Cursor Alt+V", () => copyPrompt(buildCursorFix, "已複製 Cursor Fix Prompt"), "#059669"));
         content.appendChild(createButton("⑥ 變成 Cursor Rule", () => copyPrompt(buildRule, "已複製 Make Rule Prompt"), "#7c3aed"));
-        content.appendChild(createButton("⑦ 複製整個 Session Alt+S", captureFullSession, "#be123c"));
-        content.appendChild(createButton("⑨ Alt+N 全 Session → OneNote 20pt", copyFullSessionRichTextForOffice, "#d97706"));
+        content.appendChild(createButton("⑦ Alt+S 全 Session 原始純文字", copyFullSessionRawText, "#be123c"));
+        content.appendChild(createButton("⑨ Alt+N 全 Session → OneNote/Word 20pt", () => copyFullSessionRichTextForOffice("Alt+N"), "#d97706"));
         content.appendChild(createButton("⑫ 整理成筆記 Prompt Alt+Shift+N", () => copyPrompt(buildOneNotePrompt, "已複製 OneNote 筆記整理 Prompt"), "#92400e"));
-        content.appendChild(createButton("⑩ 複製 Word/OneNote 格式 Alt+W", copyRichTextForOffice, "#0891b2"));
-        content.appendChild(createButton("⑪ 複製整頁 Word/OneNote Alt+Shift+W", copyFullSessionRichTextForOffice, "#0e7490"));
+        content.appendChild(createButton("⑩ Alt+W 單段 → OneNote/Word 20pt", copyRichTextForOffice, "#0891b2"));
+        content.appendChild(createButton("⑪ Alt+Shift+W 全 Session → OneNote/Word", () => copyFullSessionRichTextForOffice("Alt+Shift+W"), "#0e7490"));
         content.appendChild(createButton("⑧ 重置面板位置", async () => {
             const p = document.getElementById(PANEL_ID);
             if (p) {
@@ -1921,7 +1933,7 @@ ${body}
         }, "#0f766e"));
 
         const hint = document.createElement("div");
-        hint.textContent = "Alt+C 原文 / Alt+S 原文Session / Alt+W 單段格式 / Alt+N 全Session到OneNote";
+        hint.textContent = "Alt+S=全Session原文 / Alt+W=單段格式 / Alt+N=全Session到OneNote";
         hint.style.fontSize = "11px";
         hint.style.color = "#d1d5db";
         hint.style.marginTop = "2px";
@@ -1965,54 +1977,63 @@ ${body}
         if (event.altKey && !event.shiftKey && !event.ctrlKey && (key === "c" || code === "KeyC")) {
             event.preventDefault();
             event.stopPropagation();
+            event.stopImmediatePropagation();
             await captureCurrentAnswer();
         }
 
         if (event.altKey && !event.shiftKey && !event.ctrlKey && (key === "v" || code === "KeyV")) {
             event.preventDefault();
             event.stopPropagation();
+            event.stopImmediatePropagation();
             await copyPrompt(buildCursorFix, "已複製 Cursor Fix Prompt");
         }
 
         if (event.altKey && event.shiftKey && !event.ctrlKey && (key === "s" || code === "KeyS")) {
             event.preventDefault();
             event.stopPropagation();
+            event.stopImmediatePropagation();
             await copyFullSessionRawText();
         }
 
         if (event.altKey && !event.shiftKey && !event.ctrlKey && (key === "s" || code === "KeyS")) {
             event.preventDefault();
             event.stopPropagation();
+            event.stopImmediatePropagation();
             await copyFullSessionRawText();
         }
 
         if (event.altKey && event.shiftKey && !event.ctrlKey && (key === "n" || code === "KeyN")) {
             event.preventDefault();
             event.stopPropagation();
+            event.stopImmediatePropagation();
             await copyPrompt(buildOneNotePrompt, "已複製 OneNote 筆記整理 Prompt");
         }
 
         if (event.altKey && !event.shiftKey && !event.ctrlKey && (key === "n" || code === "KeyN")) {
             event.preventDefault();
             event.stopPropagation();
-            await copyFullSessionRichTextForOffice();
+            event.stopImmediatePropagation();
+            await copyFullSessionRichTextForOffice("Alt+N");
         }
 
         if (event.altKey && event.shiftKey && !event.ctrlKey && (key === "w" || code === "KeyW")) {
             event.preventDefault();
             event.stopPropagation();
-            await copyFullSessionRichTextForOffice();
+            event.stopImmediatePropagation();
+            await copyFullSessionRichTextForOffice("Alt+Shift+W");
         }
 
         if (event.altKey && !event.shiftKey && !event.ctrlKey && (key === "w" || code === "KeyW")) {
             event.preventDefault();
             event.stopPropagation();
+            event.stopImmediatePropagation();
             await copyRichTextForOffice();
         }
 
         if (event.altKey && !event.shiftKey && !event.ctrlKey && (key === "b" || code === "KeyB")) {
             event.preventDefault();
             event.stopPropagation();
+            event.stopImmediatePropagation();
 
             const panel = document.getElementById(PANEL_ID);
 
@@ -2027,9 +2048,10 @@ ${body}
         if (event.altKey && !event.shiftKey && !event.ctrlKey && (key === "r" || code === "KeyR")) {
             event.preventDefault();
             event.stopPropagation();
+            event.stopImmediatePropagation();
             await showPanelAtDefaultPosition();
         }
-    });
+    }, true);
 
     let lastUrl = location.href;
 
@@ -2051,11 +2073,11 @@ ${body}
         GM_registerMenuCommand("Copy Full Session Raw Text (Alt+S)", async () => {
             await copyFullSessionRawText();
         });
-        GM_registerMenuCommand("Copy Rich Text for Word / OneNote", async () => {
+        GM_registerMenuCommand("Alt+W Copy Single Answer Rich Text", async () => {
             await copyRichTextForOffice();
         });
-        GM_registerMenuCommand("Copy Full Session Rich Text for Word / OneNote (Alt+N)", async () => {
-            await copyFullSessionRichTextForOffice();
+        GM_registerMenuCommand("Alt+N Copy Full Session Rich Text", async () => {
+            await copyFullSessionRichTextForOffice("Menu Alt+N");
         });
     }
 
@@ -2066,3 +2088,4 @@ ${body}
         setTimeout(ensurePanel, 2000);
     });
 })();
+
