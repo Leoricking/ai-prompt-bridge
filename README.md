@@ -1,4 +1,4 @@
-# AI Prompt Bridge v1.18
+# AI Prompt Bridge v1.19
 
 AI Prompt Bridge 是一個 Tampermonkey userscript，用來在 ChatGPT、Gemini、Claude、DeepSeek、Perplexity、Qwen、Cursor 等頁面之間快速搬運內容、生成 review prompt、生成 Cursor fix prompt、整理筆記，以及複製 Word / OneNote 可用的乾淨富文本。
 
@@ -892,4 +892,59 @@ git commit -m "fix: clarify Alt+N full-session export" -m "- Make Alt+N full-ses
 - Update panel labels to distinguish raw session, single-answer rich copy, and full-session rich copy.
 - Improve shortcut reliability with capture-phase keydown and stopImmediatePropagation.
 - Update README with v1.18 shortcut behavior and troubleshooting notes."
+```
+
+---
+
+## v1.19：修正 ChatGPT 新版版面 Alt+W 找不到 AI 回答
+
+v1.19 修正新版 ChatGPT / 專案頁面中，按 `Alt+W` 出現：
+
+```text
+沒有找到可複製的 AI 回答。請先選取內容，或確認目前頁面有 AI 回覆。
+```
+
+### 問題原因
+
+ChatGPT 的 DOM 版面會變動。部分頁面不一定有舊版 `.markdown`、`.agent-turn` 或 `[data-message-author-role="assistant"]` 結構，導致 `Alt+W` 找不到最新回答。
+
+### v1.19 修正
+
+```text
+1. 增加新版 ChatGPT selector：
+   - [data-testid*="conversation-turn"]
+   - [data-testid*="assistant"]
+   - [class*="group/conversation-turn"]
+   - article
+   - main article
+   - main [class*="markdown"]
+   - main [class*="prose"]
+
+2. Alt+W 加入 visible content fallback。
+3. fallback 會排除 sidebar、composer、AI Prompt Bridge 面板、輸入框與導覽列。
+4. Alt+C 若 getLastAnswer 失敗，也會改用同一套 visible fallback。
+5. 錯誤提示改成建議使用手動選取，或 Alt+S / Alt+N 複製整個 session。
+```
+
+### 使用建議
+
+```text
+Alt+W：複製目前最新可見 AI 回答或手動選取內容
+Alt+S：複製完整 session 原始純文字
+Alt+N：複製完整 session 到 OneNote / Word
+```
+
+如果 `Alt+W` 在特殊頁面仍抓不到，請直接框選要保存的段落再按 `Alt+W`。
+
+---
+
+## v1.19 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "fix: improve ChatGPT answer detection for rich copy" -m "- Add robust ChatGPT selectors for newer conversation layouts.
+- Add visible-content fallback for Alt+W when standard answer selectors miss.
+- Exclude sidebar, composer, navigation, and AI Prompt Bridge panel from fallback extraction.
+- Let Alt+C reuse the latest-answer fallback when normal text extraction fails.
+- Update README with v1.19 troubleshooting notes for Alt+W."
 ```

@@ -1,8 +1,8 @@
 ﻿// ==UserScript==
 // @name         AI Prompt Bridge
 // @namespace    https://ai-prompt-bridge.local/ai-prompt-bridge
-// @version      1.18.0
-// @description  Cross-AI prompt bridge for ChatGPT, Gemini, Claude, DeepSeek, Qwen, Perplexity and Cursor workflows. Makes Alt+N full-session OneNote export unmistakable, ignores selection, and improves shortcut reliability.
+// @version      1.19.0
+// @description  Cross-AI prompt bridge for ChatGPT, Gemini, Claude, DeepSeek, Qwen, Perplexity and Cursor workflows. Fixes Alt+W missing-answer detection on newer ChatGPT layouts with robust visible-message fallback.
 // @author       Rossi
 // @match        https://chatgpt.com/*
 // @match        https://chat.openai.com/*
@@ -30,7 +30,7 @@
 (function () {
     "use strict";
 
-    const AI_PROMPT_BRIDGE_VERSION = "1.18.0";
+    const AI_PROMPT_BRIDGE_VERSION = "1.19.0";
     console.log("[AI Prompt Bridge] injected", AI_PROMPT_BRIDGE_VERSION, location.href);
 
     function showStartupProbe() {
@@ -66,13 +66,13 @@
         }
     }
 
-    const STORAGE_KEY = "ai_prompt_bridge_payload_v118";
-    const PANEL_POS_KEY = "ai_prompt_bridge_panel_position_v118";
-    const PANEL_ID = "ai-prompt-bridge-panel-v118";
-    const BUBBLE_ID = "ai-prompt-bridge-restore-bubble-v118";
-    const COLLAPSED_KEY = "ai_prompt_bridge_collapsed_v118";
-    const HIDDEN_KEY = "ai_prompt_bridge_hidden_v118";
-    const PROJECT_KEY = "ai_prompt_bridge_project_key_v118";
+    const STORAGE_KEY = "ai_prompt_bridge_payload_v119";
+    const PANEL_POS_KEY = "ai_prompt_bridge_panel_position_v119";
+    const PANEL_ID = "ai-prompt-bridge-panel-v119";
+    const BUBBLE_ID = "ai-prompt-bridge-restore-bubble-v119";
+    const COLLAPSED_KEY = "ai_prompt_bridge_collapsed_v119";
+    const HIDDEN_KEY = "ai_prompt_bridge_hidden_v119";
+    const PROJECT_KEY = "ai_prompt_bridge_project_key_v119";
 
     const PROJECTS = {
         auto: {
@@ -888,6 +888,141 @@
     }
 
 
+    function isBridgeOrNonContentElement(element) {
+        if (!element || !element.closest) return true;
+
+        if (
+            element.closest(`#${PANEL_ID}`) ||
+            element.closest(`#${BUBBLE_ID}`) ||
+            element.closest("#ai-prompt-bridge-startup-probe") ||
+            element.closest("textarea,input,select,form,nav,aside,header,footer")
+        ) {
+            return true;
+        }
+
+        const text = normalizeText(element.innerText || element.textContent || "");
+        if (!text) return true;
+
+        const lower = text.toLowerCase();
+        const noisy = [
+            "ai prompt bridge",
+            "project context",
+            "alt+c",
+            "alt+v",
+            "alt+n",
+            "alt+w",
+            "chatgpt 可能會出錯",
+            "想問什麼都可以",
+            "new chat",
+            "search chats",
+            "聊天紀錄",
+            "專案"
+        ];
+
+        return noisy.some((token) => lower.includes(token)) && text.length < 600;
+    }
+
+    function isVisibleElement(element) {
+        if (!element || !element.getBoundingClientRect) return false;
+        const rect = element.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return false;
+
+        const style = window.getComputedStyle ? window.getComputedStyle(element) : null;
+        if (style && (style.display === "none" || style.visibility === "hidden" || style.opacity === "0")) {
+            return false;
+        }
+
+        return rect.bottom > 0 && rect.top < window.innerHeight;
+    }
+
+    function makeElementFromText(text, label = "AI Answer") {
+        const wrapper = document.createElement("div");
+        wrapper.setAttribute("data-ai-prompt-bridge-fallback", "text");
+        const title = document.createElement("h2");
+        title.textContent = label;
+        const pre = document.createElement("div");
+        pre.style.whiteSpace = "pre-wrap";
+        pre.textContent = text;
+        wrapper.appendChild(title);
+        wrapper.appendChild(pre);
+        return wrapper;
+    }
+
+    function getVisibleContentFallbackElement() {
+        const roots = [
+            document.querySelector("main"),
+            document.querySelector('[role="main"]'),
+            document.body
+        ].filter(Boolean);
+
+        const selectors = [
+            "article",
+            "[data-testid*='conversation']",
+            "[data-testid*='turn']",
+            "[data-message-author-role]",
+            ".markdown",
+            ".prose",
+            "section",
+            "div"
+        ];
+
+        const candidates = [];
+        const seen = new Set();
+
+        roots.forEach((root) => {
+            selectors.forEach((selector) => {
+                try {
+                    root.querySelectorAll(selector).forEach((element) => {
+                        if (seen.has(element)) return;
+                        seen.add(element);
+
+                        if (!isVisibleElement(element) || isBridgeOrNonContentElement(element)) return;
+
+                        const text = normalizeText(element.innerText || element.textContent || "");
+                        if (text.length < 20 || text.length > 20000) return;
+
+                        const rect = element.getBoundingClientRect();
+                        const containsComposer =
+                            element.querySelector("textarea,input,[contenteditable='true']") ||
+                            text.includes("想問什麼都可以") ||
+                            text.includes("問問 ChatGPT");
+
+                        if (containsComposer) return;
+
+                        candidates.push({
+                            element,
+                            text,
+                            length: text.length,
+                            top: rect.top,
+                            bottom: rect.bottom,
+                            area: rect.width * rect.height,
+                            score: text.length + Math.max(0, rect.top)
+                        });
+                    });
+                } catch (error) {
+                    console.warn("[AI Prompt Bridge] fallback selector failed", selector, error);
+                }
+            });
+        });
+
+        if (candidates.length === 0) {
+            return null;
+        }
+
+        // Prefer a visible conversation block near the lower part of the viewport, but avoid huge page roots.
+        candidates.sort((a, b) => {
+            const aRole = a.element.matches?.('[data-message-author-role="assistant"]') ? 100000 : 0;
+            const bRole = b.element.matches?.('[data-message-author-role="assistant"]') ? 100000 : 0;
+            const aMarkdown = a.element.matches?.(".markdown,.prose") ? 50000 : 0;
+            const bMarkdown = b.element.matches?.(".markdown,.prose") ? 50000 : 0;
+            return (aRole + aMarkdown + a.bottom + Math.min(a.length, 3000)) -
+                   (bRole + bMarkdown + b.bottom + Math.min(b.length, 3000));
+        });
+
+        return candidates[candidates.length - 1].element;
+    }
+
+
     function getSelectionHtml() {
         try {
             const selection = window.getSelection();
@@ -919,9 +1054,17 @@
             selectors = [
                 '[data-message-author-role="assistant"]',
                 '[data-message-author-role="assistant"] .markdown',
+                '[data-testid*="conversation-turn"]',
+                '[data-testid*="assistant"]',
+                '[class*="group/conversation-turn"]',
+                "article",
                 ".agent-turn",
                 ".agent-turn .markdown",
-                ".markdown"
+                ".markdown",
+                ".prose",
+                "main article",
+                "main [class*='markdown']",
+                "main [class*='prose']"
             ];
         } else if (site === "Gemini") {
             selectors = [
@@ -930,19 +1073,24 @@
                 "model-response",
                 "render-viewer",
                 "[data-response-index]",
-                ".conversation-container"
+                ".conversation-container",
+                "main article",
+                ".markdown",
+                ".prose"
             ];
         } else if (site === "Claude") {
             selectors = [
                 '[data-testid*="message"]',
                 ".font-claude-message",
                 ".prose",
+                ".markdown",
                 "[class*='message']"
             ];
         } else if (site === "DeepSeek") {
             selectors = [
                 ".ds-markdown",
                 ".markdown",
+                ".prose",
                 "[class*='markdown']",
                 "[class*='message']"
             ];
@@ -950,25 +1098,41 @@
             selectors = [
                 ".prose",
                 "[class*='answer']",
-                "[class*='markdown']"
+                "[class*='markdown']",
+                "main article"
             ];
         } else {
             selectors = [
                 ".markdown",
                 ".prose",
+                "article",
                 "[class*='markdown']",
                 "[class*='message']",
-                "main"
+                "main article"
             ];
         }
 
         const candidates = [];
+        const seen = new Set();
+
         selectors.forEach((selector) => {
             try {
                 document.querySelectorAll(selector).forEach((element) => {
+                    if (seen.has(element)) return;
+                    seen.add(element);
+
+                    if (!isVisibleElement(element) || isBridgeOrNonContentElement(element)) return;
+
                     const text = normalizeText(element.innerText || element.textContent || "");
                     if (text.length > 20) {
-                        candidates.push({ element, textLength: text.length });
+                        const rect = element.getBoundingClientRect();
+                        candidates.push({
+                            element,
+                            textLength: text.length,
+                            bottom: rect.bottom,
+                            isAssistant: element.matches?.('[data-message-author-role="assistant"]') ? 1 : 0,
+                            isMarkdown: element.matches?.(".markdown,.prose") ? 1 : 0
+                        });
                     }
                 });
             } catch (error) {
@@ -976,11 +1140,22 @@
             }
         });
 
-        if (candidates.length === 0) {
-            return null;
+        if (candidates.length > 0) {
+            candidates.sort((a, b) => {
+                const scoreA = a.isAssistant * 100000 + a.isMarkdown * 50000 + a.bottom + Math.min(a.textLength, 5000);
+                const scoreB = b.isAssistant * 100000 + b.isMarkdown * 50000 + b.bottom + Math.min(b.textLength, 5000);
+                return scoreA - scoreB;
+            });
+            return candidates[candidates.length - 1].element;
         }
 
-        return candidates[candidates.length - 1].element;
+        const fallback = getVisibleContentFallbackElement();
+        if (fallback) {
+            console.warn("[AI Prompt Bridge] latest answer selectors missed; using visible content fallback");
+            return fallback;
+        }
+
+        return null;
     }
 
 
@@ -1537,7 +1712,7 @@ ${body}
         const targetElement = selectedContainer || getLatestAnswerElement();
 
         if (!targetElement) {
-            alert("沒有找到可複製的 AI 回答。請先選取內容，或確認目前頁面有 AI 回覆。");
+            alert("沒有找到可複製的 AI 回答。請先手動選取要複製的段落，或按 Alt+S / Alt+N 複製整個 session。");
             return;
         }
 
@@ -1574,10 +1749,15 @@ ${body}
 
     async function captureCurrentAnswer() {
         const selected = getSelectedText();
-        const text = getLastAnswer();
+        let text = getLastAnswer();
 
         if (!text) {
-            alert("沒有抓到內容。請先選取文字，或確認目前頁面有 AI 回覆。");
+            const fallback = getLatestAnswerElement();
+            text = fallback ? normalizeText(fallback.innerText || fallback.textContent || "") : "";
+        }
+
+        if (!text) {
+            alert("沒有抓到內容。請先手動選取文字，或確認目前頁面有 AI 回覆。");
             return;
         }
 
