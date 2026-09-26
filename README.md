@@ -1,4 +1,4 @@
-# AI Prompt Bridge v1.19
+# AI Prompt Bridge v1.28
 
 AI Prompt Bridge 是一個 Tampermonkey userscript，用來在 ChatGPT、Gemini、Claude、DeepSeek、Perplexity、Qwen、Cursor 等頁面之間快速搬運內容、生成 review prompt、生成 Cursor fix prompt、整理筆記，以及複製 Word / OneNote 可用的乾淨富文本。
 
@@ -947,4 +947,515 @@ git commit -m "fix: improve ChatGPT answer detection for rich copy" -m "- Add ro
 - Exclude sidebar, composer, navigation, and AI Prompt Bridge panel from fallback extraction.
 - Let Alt+C reuse the latest-answer fallback when normal text extraction fails.
 - Update README with v1.19 troubleshooting notes for Alt+W."
+```
+
+---
+
+## v1.20：修正 Alt+W 誤觸發全 Session
+
+v1.20 修正 `Alt+W` 有時被判定成 `Alt+Shift+W`，導致變成完整 session 複製的問題。
+
+### 問題原因
+
+`Alt+N` 已經是正式的完整 session → OneNote / Word 富文本快捷鍵。  
+`Alt+Shift+W` 原本只是保留相容用的備用快捷鍵，但在部分瀏覽器 / 鍵盤狀態 / 輸入法情境下，可能造成使用者按 `Alt+W` 時誤以為觸發到完整 session 匯出。
+
+### v1.20 修正
+
+```text
+1. Alt+W：固定為單段 / 選取內容 → OneNote / Word 富文本
+2. Alt+Shift+W：也改成單段 / 選取內容 → OneNote / Word 富文本
+3. 完整 session 富文本只使用 Alt+N
+4. 面板保留一個「全 Session → OneNote/Word 備用按鈕」，但不再綁 Alt+Shift+W
+```
+
+### 最新快捷鍵定義
+
+```text
+Alt+W：單段 / 選取內容 → OneNote / Word 富文本
+Alt+Shift+W：同 Alt+W，避免誤觸變完整 session
+Alt+N：完整 session → OneNote / Word 富文本
+Alt+S：完整 session → 原始純文字
+```
+
+---
+
+## v1.20 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "fix: prevent Alt+W from triggering full-session export" -m "- Make Alt+W always perform single-answer rich text copy.
+- Change Alt+Shift+W to the same single-answer rich copy behavior to avoid accidental full-session export.
+- Keep Alt+N as the only keyboard shortcut for full-session OneNote / Word rich-text export.
+- Keep a panel-only fallback button for full-session rich export.
+- Update README with v1.20 shortcut behavior."
+```
+
+---
+
+## v1.21：修正 Alt+W 仍複製整個 Session
+
+v1.21 針對 `Alt+W` 仍然抓到整個 session 的問題做強化修正。
+
+### 問題原因
+
+v1.20 已經移除 `Alt+Shift+W` 的完整 session 快捷鍵，但 `Alt+W` 的「自動抓最新回答」仍可能選到過大的 ChatGPT 容器，例如：
+
+```text
+main
+article 外層容器
+conversation-turn 外層容器
+包含多個 [data-message-author-role] 的父層
+```
+
+這些容器看起來像一段回答，但實際上可能包住整個 session。
+
+### v1.21 修正
+
+```text
+1. Alt+W 不再使用 main / article / conversation root 當優先候選。
+2. Alt+W 會拒絕包含多個 [data-message-author-role] 的容器。
+3. Alt+W 會拒絕過大的 root / main / body 類容器。
+4. Alt+W fallback 改成 single-answer fallback，不再用全頁 div fallback。
+5. 如果候選內容像完整 session，Alt+W 會停止並提醒：
+   - 手動框選單段後再按 Alt+W
+   - 完整 session 請用 Alt+N
+```
+
+### 最新定義
+
+```text
+Alt+W：只允許單段 / 選取內容
+Alt+N：完整 session → OneNote / Word
+Alt+S：完整 session → 原始純文字
+```
+
+### 使用建議
+
+如果自動偵測仍不準，請直接用滑鼠框選紅圈段落，再按 `Alt+W`。  
+手動選取永遠是最高優先。
+
+---
+
+## v1.21 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "fix: prevent Alt+W from copying whole session containers" -m "- Harden Alt+W latest-answer detection to reject whole-session containers.
+- Reject body, main, root, and elements containing multiple data-message-author-role nodes for single-answer copy.
+- Replace broad visible div fallback with a strict single-answer fallback.
+- Stop Alt+W with a clear warning if the candidate looks like a full session.
+- Keep Alt+N as the full-session OneNote / Word rich-text export shortcut."
+```
+
+---
+
+## v1.22：修正 Alt+W / Alt+Shift+W 找不到單段內容
+
+v1.22 修正 `Alt+W` / `Alt+Shift+W` 在新版 ChatGPT 頁面中出現：
+
+```text
+沒有找到可複製的 AI 回答
+```
+
+或因為過度保守而抓不到目前可見回答的問題。
+
+### 問題原因
+
+v1.21 為了避免 `Alt+W` 誤抓整個 session，把 root / main / 外層 conversation container 都擋掉。  
+這雖然避免了全 session 誤複製，但在新版 ChatGPT DOM 中，有些回答沒有穩定的 `.markdown` / `.prose` 單段節點，因此會抓不到。
+
+### v1.22 修正
+
+```text
+1. Alt+W 保持「只複製單段」原則。
+2. Alt+Shift+W 同 Alt+W，也只複製單段。
+3. 新增 safe visible-text fallback：
+   - 只抓目前螢幕可見的 p / li / h1-h4 / blockquote / pre / table
+   - 排除 sidebar、composer、AI Prompt Bridge 面板、輸入框與導覽列
+   - 限制最大文字量，避免複製整個 session
+4. 若標準 selector 找不到回答，Alt+W 會改抓目前 viewport 內的可見回答文字。
+5. 手動框選仍是最高優先。
+```
+
+### 最新快捷鍵
+
+```text
+Alt+W：單段 / 選取內容 → OneNote / Word 富文本
+Alt+Shift+W：同 Alt+W，單段 / 選取內容
+Alt+N：完整 session → OneNote / Word 富文本
+Alt+S：完整 session → 原始純文字
+```
+
+---
+
+## v1.22 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "fix: add safe visible fallback for Alt+W" -m "- Keep Alt+W and Alt+Shift+W as single-answer rich copy only.
+- Add a safe visible-text fallback for newer ChatGPT layouts where standard answer selectors miss.
+- Collect only visible viewport text blocks and exclude sidebar, composer, navigation, and bridge UI.
+- Cap fallback text length to prevent whole-session copying.
+- Update README with v1.22 Alt+W fallback behavior."
+```
+
+---
+
+## v1.23：完整修復 Alt+W / Alt+Shift+W / Alt+N 匯出異常
+
+v1.23 是針對 v1.19～v1.22 的完整收斂修正版，不再用過寬的全頁 fallback。
+
+### 修正問題
+
+```text
+1. Alt+W / Alt+Shift+W 不應複製整個 session。
+2. Alt+W 不應抓到畫面上方舊回答或無意義範例文字。
+3. Alt+W 應從目前可見回答區塊的第一段有效文字開始，例如：
+   「這組圖的核心不是『上班沒用』，而是...」
+4. Alt+N 不應輸出只有：
+   ## 1. message
+   ## 2. message
+   但沒有內容的空白 session。
+```
+
+### v1.23 行為定義
+
+```text
+Alt+W：
+- 有手動選取：只複製手動選取內容。
+- 沒有手動選取：複製目前螢幕可見的最新 AI 回答段落。
+- 不再抓 main/body/root/container。
+- 不再複製整個 session。
+
+Alt+Shift+W：
+- 與 Alt+W 相同。
+- 不再作為 full-session shortcut。
+
+Alt+N：
+- 完整 session → OneNote / Word 富文本。
+- 改用 raw transcript 重建富文本，避免 DOM clone 後只剩 message 標題、內容空白。
+
+Alt+S：
+- 保持完整 session 原始純文字。
+```
+
+### 實作重點
+
+```text
+1. 新增 getCurrentVisibleAssistantContainer()：
+   只找目前 viewport 內最接近輸入框的 AI 回答容器。
+
+2. 新增 buildVisibleTextSegmentFromContainer()：
+   從目前 AI 回答容器內，抓第一個可見有效文字段落開始往下整理。
+
+3. 新增 textToRichBlock() / createTranscriptBlockFromText()：
+   Alt+N 直接用 raw transcript 重建 HTML 富文本，避免空白 message。
+
+4. 保留手動框選最高優先：
+   想精準複製某一段，滑鼠框選後按 Alt+W。
+```
+
+---
+
+## v1.23 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "fix: stabilize rich copy and full-session export" -m "- Rebuild Alt+W and Alt+Shift+W to copy only the current visible AI answer segment.
+- Avoid broad page, root, main, and whole-session fallbacks for single-answer rich copy.
+- Start Alt+W export from the first visible meaningful text block in the current answer.
+- Rebuild Alt+N rich full-session export from the raw transcript to prevent blank message sections.
+- Keep Alt+S raw full-session export and other prompt workflows unchanged.
+- Update README with v1.23 behavior and troubleshooting notes."
+```
+
+---
+
+## v1.24：修正 Alt+W / Alt+Shift+W 仍抓到雜訊與錯段問題
+
+v1.24 針對實測影片中的問題修正：
+
+```text
+1. Alt+W / Alt+Shift+W 不應出現 Visible AI Answer 標題。
+2. Alt+W / Alt+Shift+W 不應複製「純文字」、「ChatGPT 說」、「複製 / 編輯 / 分享」等 UI 或輔助文字。
+3. Alt+W / Alt+Shift+W 不應抓到畫面上方舊片段。
+4. Alt+W / Alt+Shift+W 應只複製目前可見的 AI 回答正文。
+```
+
+### v1.24 行為
+
+```text
+Alt+W：
+- 有手動選取：只複製選取內容。
+- 沒有選取：只抓目前畫面可見的 AI 回答正文。
+- 不再使用 getLatestAnswerElement 的全頁 fallback。
+- 不再輸出 Visible AI Answer 標題。
+
+Alt+Shift+W：
+- 與 Alt+W 完全相同。
+- 不再是 full-session 功能。
+
+Alt+N：
+- 維持完整 session → OneNote / Word。
+- 繼續使用 raw transcript 重建 HTML，降低空白 message 風險。
+```
+
+### v1.24 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "fix: remove noisy labels from rich copy" -m "- Make Alt+W and Alt+Shift+W copy only the current visible assistant body.
+- Remove Visible AI Answer, ChatGPT 說, 純文字, and utility UI labels from rich-copy output.
+- Stop Alt+W from using broad latest-answer fallback when no safe current answer is detected.
+- Prefer primary markdown/prose content roots inside assistant messages.
+- Keep Alt+N full-session rich export and Alt+S raw export behavior unchanged."
+```
+
+---
+
+## v1.25：Alt+W 改為複製「最新 AI 回答整段」
+
+v1.25 重新定義並修正 `Alt+W` / `Alt+Shift+W`：
+
+```text
+Alt+W 不是只複製目前 viewport 看到的幾個段落。
+Alt+W 應該複製最新一則 assistant 回答的完整內容。
+```
+
+### 最新定義
+
+```text
+Alt+W：
+- 有手動選取：複製手動選取內容。
+- 沒有手動選取：複製最新一則 AI 回答整段內容。
+- 輸出 Word / OneNote 可貼上的富文本。
+- 不應複製整個 session。
+- 不應插入 Visible AI Answer / ChatGPT 說 / 純文字 等雜訊標題。
+
+Alt+Shift+W：
+- 同 Alt+W。
+
+Alt+N：
+- 完整 session → Word / OneNote 富文本。
+
+Alt+S：
+- 完整 session → 原始純文字。
+```
+
+### v1.25 修正內容
+
+```text
+1. 新增 getLatestAssistantAnswerContainer()：
+   找出最新一則 assistant 回答，而不是目前可見片段。
+
+2. 新增 buildFullSingleAnswerElement()：
+   從最新 assistant 回答內抓主要 markdown/prose 內容，完整複製該回答。
+
+3. Alt+W 不再使用 viewport-only visible segment 作為主要來源。
+
+4. Alt+W 仍保留手動選取最高優先。
+```
+
+---
+
+## v1.25 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "fix: make Alt+W copy latest full answer" -m "- Redefine Alt+W and Alt+Shift+W to copy the latest assistant answer as a full single answer.
+- Keep manual selection as the highest priority for Alt+W.
+- Add latest assistant answer detection and primary content extraction.
+- Avoid copying full sessions or viewport-only partial snippets for Alt+W.
+- Keep Alt+N as the full-session Word / OneNote rich export shortcut."
+```
+
+---
+
+## v1.26：修正新版 ChatGPT 沒有穩定 assistant marker 時 Alt+W 找不到最新回答
+
+v1.26 修正 `Alt+W` 出現：
+
+```text
+Alt+W 沒有找到最新 AI 回答
+```
+
+的問題。
+
+### 問題原因
+
+部分 ChatGPT / Project / GPT 頁面沒有穩定的：
+
+```text
+[data-message-author-role="assistant"]
+.markdown
+.prose
+```
+
+或這些標記不在目前可讀內容的外層，導致 v1.25 找不到最新 assistant answer。
+
+### v1.26 修正
+
+```text
+1. Alt+W 仍以「最新一則 AI 回答整段」為目標。
+2. 優先使用 assistant marker / markdown / prose。
+3. 若標準偵測失敗，改用 readable-block fallback：
+   - 從 main 內找可見的 p / li / h1-h4 / blockquote / table / pre
+   - 排除 sidebar / composer / buttons / AI Prompt Bridge panel
+   - 從靠近輸入框的最新可讀內容往上合併
+   - 避免抓整個 session
+4. 手動框選仍是最高優先。
+```
+
+### 最新定義
+
+```text
+Alt+W：最新 AI 回答整段 → Word / OneNote
+Alt+Shift+W：同 Alt+W
+Alt+N：完整 session → Word / OneNote
+Alt+S：完整 session → 原始純文字
+```
+
+---
+
+## v1.26 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "fix: add readable fallback for Alt+W latest answer" -m "- Keep Alt+W and Alt+Shift+W as latest full assistant answer copy.
+- Add readable-block fallback for ChatGPT layouts without stable assistant markers.
+- Build latest answer content from visible readable blocks near the composer when standard selectors fail.
+- Exclude sidebar, composer, buttons, and bridge UI from fallback extraction.
+- Keep Alt+N as the full-session Word / OneNote rich export shortcut."
+```
+
+---
+
+## v1.27：Office Export Clean Format 版
+
+v1.27 針對 Word / OneNote 富文本輸出做收斂修正。
+
+### 修正問題
+
+```text
+1. Alt+N 複製整個 session 到 OneNote / Word 時，格式不能跑掉。
+2. Alt+N 不應再輸出 AI Session Export / Source / Captured At / URL / Messages 這些 metadata。
+3. Alt+N / Alt+W 不應帶入「純文字」、「啟用自動換行」、「ChatGPT 說」、「Visible AI Answer」等無用贅字。
+4. Alt+N 不應變成一整串沒有段落的文字。
+5. Alt+W 仍維持複製最新一則 AI 回答整段內容。
+```
+
+### v1.27 行為定義
+
+```text
+Alt+W：
+- 有手動選取：複製手動選取內容。
+- 沒有手動選取：複製最新一則 AI 回答整段內容。
+- 輸出 Word / OneNote 富文本。
+- 套用同一套 Office 清理邏輯。
+
+Alt+Shift+W：
+- 同 Alt+W。
+
+Alt+N：
+- 完整 session → Word / OneNote 富文本。
+- 保留段落、標題、清單、引用結構。
+- 移除 metadata 與 UI 贅字。
+
+Alt+S：
+- 完整 session → 原始純文字。
+```
+
+### 已清理的常見贅字
+
+```text
+Visible AI Answer
+AI Answer
+ChatGPT 說
+純文字
+啟用自動換行
+複製
+編輯
+分享
+更多
+資料來源
+ChatGPT 可能會出錯。請查證重要資訊。
+```
+
+---
+
+## v1.27 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "fix: clean Word and OneNote rich exports" -m "- Clean Alt+N full-session rich export for Word and OneNote.
+- Remove AI Session Export metadata headers from Alt+N output.
+- Preserve paragraphs, headings, lists, and blockquotes in Office rich text.
+- Filter noisy UI labels such as 純文字, 啟用自動換行, ChatGPT 說, and Visible AI Answer.
+- Apply the same Office cleanup to Alt+W latest-answer rich copy.
+- Keep Alt+S raw full-session export behavior unchanged."
+```
+
+---
+
+## v1.28：Alt+N 全 Session 可讀排版修正版
+
+v1.28 針對 Alt+N 貼到 OneNote / Word 後排版混亂、只抓到一則、或整段擠成一大段的問題修正。
+
+### 修正問題
+
+```text
+1. Alt+N 不應只抓到 1. message。
+2. Alt+N 應盡量抓整個已載入 session。
+3. Alt+N 貼到 OneNote / Word 應保持可讀段落，不應橫向爆版。
+4. Alt+N 不應帶入：
+   - 正在載入較早的訊息
+   - 純文字
+   - 啟用自動換行
+   - ChatGPT 說
+   - 你說
+   - ChatGPT 可能會出錯
+5. Alt+W / Alt+Shift+W 不改功能，仍是最新回答整段。
+```
+
+### v1.28 實作
+
+```text
+1. 新增 getFullSessionBlocks()：
+   優先讀取 [data-message-author-role]，若不足則解析 main.innerText。
+
+2. 新增 parseRoleBlocksFromText()：
+   可解析 ChatGPT 頁面中「你說：」「ChatGPT 說：」混在一起的原始文字。
+
+3. Alt+N 改成 role blocks → Office HTML：
+   讓每則 user / assistant message 成為獨立 section。
+
+4. OneNote / Word 外層容器固定：
+   max-width: 980px
+   font-size: 20pt
+   line-height: 1.55
+   white-space: normal
+```
+
+### 快捷鍵
+
+```text
+Alt+W：最新 AI 回答整段 → Word / OneNote
+Alt+Shift+W：同 Alt+W
+Alt+N：完整已載入 session → Word / OneNote
+Alt+S：完整已載入 session → 原始純文字
+```
+
+---
+
+## v1.28 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "fix: improve Alt+N full-session Office export layout" -m "- Improve Alt+N full-session extraction with role-based DOM and text parsing.
+- Parse ChatGPT raw transcript markers such as 你說 and ChatGPT 說 when DOM role nodes are unavailable.
+- Keep each user and assistant message as a readable Office section.
+- Remove loading text, code-block labels, auto-wrap labels, and ChatGPT footer noise from exports.
+- Constrain Office HTML width and paragraph layout for better OneNote and Word readability.
+- Keep Alt+W and Alt+Shift+W latest-answer behavior unchanged."
 ```

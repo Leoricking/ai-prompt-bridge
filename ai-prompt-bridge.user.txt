@@ -1,8 +1,8 @@
-﻿// ==UserScript==
+// ==UserScript==
 // @name         AI Prompt Bridge
 // @namespace    https://ai-prompt-bridge.local/ai-prompt-bridge
-// @version      1.19.0
-// @description  Cross-AI prompt bridge for ChatGPT, Gemini, Claude, DeepSeek, Qwen, Perplexity and Cursor workflows. Fixes Alt+W missing-answer detection on newer ChatGPT layouts with robust visible-message fallback.
+// @version      1.28.0
+// @description  Cross-AI prompt bridge for ChatGPT, Gemini, Claude, DeepSeek, Qwen, Perplexity and Cursor workflows. Stabilizes Alt+N full-session Office export with structured message parsing and cleaner readable formatting.
 // @author       Rossi
 // @match        https://chatgpt.com/*
 // @match        https://chat.openai.com/*
@@ -30,7 +30,7 @@
 (function () {
     "use strict";
 
-    const AI_PROMPT_BRIDGE_VERSION = "1.19.0";
+    const AI_PROMPT_BRIDGE_VERSION = "1.28.0";
     console.log("[AI Prompt Bridge] injected", AI_PROMPT_BRIDGE_VERSION, location.href);
 
     function showStartupProbe() {
@@ -66,13 +66,13 @@
         }
     }
 
-    const STORAGE_KEY = "ai_prompt_bridge_payload_v119";
-    const PANEL_POS_KEY = "ai_prompt_bridge_panel_position_v119";
-    const PANEL_ID = "ai-prompt-bridge-panel-v119";
-    const BUBBLE_ID = "ai-prompt-bridge-restore-bubble-v119";
-    const COLLAPSED_KEY = "ai_prompt_bridge_collapsed_v119";
-    const HIDDEN_KEY = "ai_prompt_bridge_hidden_v119";
-    const PROJECT_KEY = "ai_prompt_bridge_project_key_v119";
+    const STORAGE_KEY = "ai_prompt_bridge_payload_v128";
+    const PANEL_POS_KEY = "ai_prompt_bridge_panel_position_v128";
+    const PANEL_ID = "ai-prompt-bridge-panel-v128";
+    const BUBBLE_ID = "ai-prompt-bridge-restore-bubble-v128";
+    const COLLAPSED_KEY = "ai_prompt_bridge_collapsed_v128";
+    const HIDDEN_KEY = "ai_prompt_bridge_hidden_v128";
+    const PROJECT_KEY = "ai_prompt_bridge_project_key_v128";
 
     const PROJECTS = {
         auto: {
@@ -420,7 +420,8 @@
 
         turns.forEach((element) => {
             const role = element.getAttribute("data-message-author-role") || "message";
-            const text = normalizeText(element.innerText || element.textContent || "");
+            const root = getPrimaryContentRoot(element);
+            const text = cleanExportText(root.innerText || root.textContent || "");
             if (!text || text.length < 2) return;
 
             const key = `${role}:${text.slice(0, 300)}`;
@@ -935,35 +936,61 @@
         return rect.bottom > 0 && rect.top < window.innerHeight;
     }
 
+    function isLikelyWholeSessionElement(element) {
+        if (!element || !element.querySelectorAll) return true;
+
+        if (element.getAttribute?.("data-ai-prompt-bridge-fallback")) return false;
+        if (element.getAttribute?.("data-ai-prompt-bridge-single-answer")) return false;
+
+        if (element === document.body || element === document.documentElement) return true;
+        if (element.matches?.("main,[role='main']")) return true;
+
+        const roleNodes = element.querySelectorAll("[data-message-author-role]");
+        if (roleNodes.length > 1) return true;
+
+        const turnNodes = element.querySelectorAll("[data-testid*='conversation-turn'], article");
+        if (turnNodes.length > 3) return true;
+
+        const text = normalizeText(element.innerText || element.textContent || "");
+        if (!text) return true;
+
+        // Alt+W is single-answer only. Extremely large containers are almost always a session/root.
+        if (text.length > 8000) return true;
+
+        const repeatedAssistant = (text.match(/Assistant|ChatGPT|Gemini|Claude|User|使用者|你說：/g) || []).length;
+        if (text.length > 2500 && repeatedAssistant >= 4) return true;
+
+        return false;
+    }
+
+    function getSingleAnswerTextLength(element) {
+        return normalizeText(element?.innerText || element?.textContent || "").length;
+    }
+
     function makeElementFromText(text, label = "AI Answer") {
         const wrapper = document.createElement("div");
         wrapper.setAttribute("data-ai-prompt-bridge-fallback", "text");
-        const title = document.createElement("h2");
-        title.textContent = label;
         const pre = document.createElement("div");
         pre.style.whiteSpace = "pre-wrap";
-        pre.textContent = text;
-        wrapper.appendChild(title);
+        pre.textContent = cleanExportText(text);
         wrapper.appendChild(pre);
         return wrapper;
     }
 
+
     function getVisibleContentFallbackElement() {
         const roots = [
             document.querySelector("main"),
-            document.querySelector('[role="main"]'),
-            document.body
+            document.querySelector('[role="main"]')
         ].filter(Boolean);
 
         const selectors = [
-            "article",
-            "[data-testid*='conversation']",
-            "[data-testid*='turn']",
-            "[data-message-author-role]",
+            '[data-message-author-role="assistant"]',
+            '[data-message-author-role="assistant"] .markdown',
             ".markdown",
             ".prose",
-            "section",
-            "div"
+            "article",
+            "section"
         ];
 
         const candidates = [];
@@ -977,9 +1004,10 @@
                         seen.add(element);
 
                         if (!isVisibleElement(element) || isBridgeOrNonContentElement(element)) return;
+                        if (isLikelyWholeSessionElement(element)) return;
 
                         const text = normalizeText(element.innerText || element.textContent || "");
-                        if (text.length < 20 || text.length > 20000) return;
+                        if (text.length < 20 || text.length > 8000) return;
 
                         const rect = element.getBoundingClientRect();
                         const containsComposer =
@@ -991,12 +1019,11 @@
 
                         candidates.push({
                             element,
-                            text,
-                            length: text.length,
-                            top: rect.top,
+                            textLength: text.length,
                             bottom: rect.bottom,
-                            area: rect.width * rect.height,
-                            score: text.length + Math.max(0, rect.top)
+                            top: rect.top,
+                            isAssistant: element.matches?.('[data-message-author-role="assistant"]') ? 1 : 0,
+                            isMarkdown: element.matches?.(".markdown,.prose") ? 1 : 0
                         });
                     });
                 } catch (error) {
@@ -1009,19 +1036,736 @@
             return null;
         }
 
-        // Prefer a visible conversation block near the lower part of the viewport, but avoid huge page roots.
         candidates.sort((a, b) => {
-            const aRole = a.element.matches?.('[data-message-author-role="assistant"]') ? 100000 : 0;
-            const bRole = b.element.matches?.('[data-message-author-role="assistant"]') ? 100000 : 0;
-            const aMarkdown = a.element.matches?.(".markdown,.prose") ? 50000 : 0;
-            const bMarkdown = b.element.matches?.(".markdown,.prose") ? 50000 : 0;
-            return (aRole + aMarkdown + a.bottom + Math.min(a.length, 3000)) -
-                   (bRole + bMarkdown + b.bottom + Math.min(b.length, 3000));
+            const scoreA =
+                a.isAssistant * 100000 +
+                a.isMarkdown * 50000 +
+                a.bottom +
+                Math.min(a.textLength, 2000) -
+                (a.textLength > 4000 ? 20000 : 0);
+            const scoreB =
+                b.isAssistant * 100000 +
+                b.isMarkdown * 50000 +
+                b.bottom +
+                Math.min(b.textLength, 2000) -
+                (b.textLength > 4000 ? 20000 : 0);
+            return scoreA - scoreB;
         });
 
         return candidates[candidates.length - 1].element;
     }
 
+    function getVisibleSingleAnswerTextFallbackElement() {
+        // Last-resort fallback for Alt+W only.
+        // It collects visible text blocks from the current viewport instead of copying a whole session/root.
+        const root = document.querySelector("main") || document.querySelector('[role="main"]');
+        if (!root) return null;
+
+        const selectors = [
+            "p",
+            "li",
+            "h1",
+            "h2",
+            "h3",
+            "h4",
+            "blockquote",
+            "pre",
+            "code",
+            "table",
+            "[data-testid*='message'] p",
+            "[data-message-author-role='assistant'] p"
+        ];
+
+        const blocks = [];
+        const seen = new Set();
+
+        selectors.forEach((selector) => {
+            try {
+                root.querySelectorAll(selector).forEach((element) => {
+                    if (seen.has(element)) return;
+                    seen.add(element);
+
+                    if (!isVisibleElement(element) || isBridgeOrNonContentElement(element)) return;
+                    if (element.closest("textarea,input,select,form,nav,aside,header,footer")) return;
+
+                    const text = normalizeText(element.innerText || element.textContent || "");
+                    if (text.length < 2 || text.length > 3000) return;
+                    if (
+                        text.includes("想問什麼都可以") ||
+                        text.includes("問問 ChatGPT") ||
+                        text.includes("ChatGPT 可能會出錯")
+                    ) {
+                        return;
+                    }
+
+                    const rect = element.getBoundingClientRect();
+                    // Keep only content actually near/current viewport. This prevents session-wide copy.
+                    if (rect.bottom < 0 || rect.top > window.innerHeight) return;
+
+                    blocks.push({
+                        text,
+                        top: rect.top,
+                        bottom: rect.bottom,
+                        element
+                    });
+                });
+            } catch (error) {
+                console.warn("[AI Prompt Bridge] visible text fallback selector failed", selector, error);
+            }
+        });
+
+        if (blocks.length === 0) return null;
+
+        blocks.sort((a, b) => a.top - b.top);
+
+        // Prefer content in the lower/current reading area, but cap total text.
+        const visible = blocks
+            .filter((block) => block.bottom > 80 && block.top < window.innerHeight - 80)
+            .slice(-18);
+
+        const chosen = visible.length ? visible : blocks.slice(-12);
+        let text = chosen.map((block) => block.text).join("\n\n");
+        text = normalizeText(text);
+
+        if (!text || text.length < 20) return null;
+
+        // Alt+W must never copy a huge session.
+        if (text.length > 5000) {
+            text = text.slice(-5000);
+        }
+
+        return makeElementFromText(text, "Visible AI Answer");
+    }
+
+
+    function cleanExportText(text) {
+        let value = safeText(text)
+            .replace(/\r\n/g, "\n")
+            .replace(/\u00a0/g, " ");
+
+        const noisyExact = new Set([
+            "Visible AI Answer",
+            "AI Answer",
+            "ChatGPT 說",
+            "ChatGPT說",
+            "純文字",
+            "啟用自動換行",
+            "自動換行",
+            "Plain text",
+            "Wrap text",
+            "複製",
+            "編輯",
+            "分享",
+            "更多",
+            "資料來源",
+            "最新回覆",
+            "回覆",
+            "已複製",
+            "正在載入較早的訊息…",
+            "正在載入較早的訊息...",
+            "轉為寫作區塊",
+            "ChatGPT 可能會出錯。請查證重要資訊。",
+            "ChatGPT 可能會出錯，請查證重要資訊。"
+        ]);
+
+        const noisyPatterns = [
+            /^ChatGPT\s*(說|said)\s*[:：]?$/i,
+            /^你說\s*[:：]?$/,
+            /^(copy|copied|edit|share|more|regenerate|read aloud)$/i,
+            /^Alt\+[A-Za-z]/,
+            /^啟用.*自動換行$/,
+            /^純文字$/,
+            /^```$/,
+            /^`{1,3}$/,
+            /^已思考\s*\d+\s*s$/i,
+            /^已思考\s*\d+\s*秒$/,
+            /^思考\s*\d+\s*s$/i,
+            /^\d{4}年\d{1,2}月\d{1,2}日\s*(上午|下午)?\s*\d{1,2}:\d{2}$/,
+            /^\d{1,2}月\d{1,2}日週[一二三四五六日天]\s*(上午|下午)\d{1,2}:\d{2}$/
+        ];
+
+        const lines = value.split("\n")
+            .map((line) => line.trim())
+            .filter((line) => {
+                if (!line) return false;
+                if (noisyExact.has(line)) return false;
+                if (noisyPatterns.some((pattern) => pattern.test(line))) return false;
+                return true;
+            });
+
+        return normalizeText(lines.join("\n"));
+    }
+
+    function isNoisyAutoCopyBlockText(text) {
+        const t = cleanExportText(text);
+        if (!t) return true;
+
+        const exact = new Set([
+            "Visible AI Answer",
+            "AI Answer",
+            "ChatGPT 說",
+            "ChatGPT說",
+            "純文字",
+            "啟用自動換行",
+            "自動換行",
+            "Plain text",
+            "Wrap text",
+            "複製",
+            "編輯",
+            "分享",
+            "更多",
+            "資料來源",
+            "最新回覆"
+        ]);
+
+        if (exact.has(t)) return true;
+        if (/^ChatGPT\s*(說|said)\s*[:：]?$/i.test(t)) return true;
+        if (/^```/.test(t)) return true;
+        if (/^(copy|copied|edit|share|more|regenerate|read aloud)$/i.test(t)) return true;
+        return false;
+    }
+
+    function getPrimaryContentRoot(container) {
+        if (!container || !container.querySelector) return container;
+
+        const roots = Array.from(container.querySelectorAll(".markdown,.prose,[class*='markdown'],[class*='prose']"))
+            .filter((node) => {
+                const text = cleanExportText(node.innerText || node.textContent || "");
+                return text.length >= 10 && isVisibleElement(node);
+            });
+
+        if (roots.length > 0) {
+            roots.sort((a, b) => {
+                const ar = a.getBoundingClientRect();
+                const br = b.getBoundingClientRect();
+                return ar.top - br.top;
+            });
+            return roots[roots.length - 1];
+        }
+
+        return container;
+    }
+
+
+    function getVisibleRatio(element) {
+        if (!element || !element.getBoundingClientRect) return 0;
+        const rect = element.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return 0;
+        const top = Math.max(rect.top, 0);
+        const bottom = Math.min(rect.bottom, window.innerHeight);
+        const visibleHeight = Math.max(0, bottom - top);
+        return visibleHeight / Math.max(1, rect.height);
+    }
+
+    function scoreLatestAssistantCandidate(element) {
+        if (!element || !element.getBoundingClientRect) return -1;
+        if (!isVisibleElement(element) || isBridgeOrNonContentElement(element)) return -1;
+        if (element === document.body || element === document.documentElement) return -1;
+        if (element.matches?.("main,[role='main']")) return -1;
+
+        const nestedRoles = element.querySelectorAll?.("[data-message-author-role]") || [];
+        if (nestedRoles.length > 1) return -1;
+
+        const root = getPrimaryContentRoot(element);
+        const text = cleanExportText(root.innerText || root.textContent || "");
+        const hasImage = Boolean(root.querySelector?.("img"));
+        if (text.length < 10 && !hasImage) return -1;
+        if (text.length > 60000) return -1;
+
+        const rect = element.getBoundingClientRect();
+        const roleScore = element.matches?.('[data-message-author-role="assistant"]') ? 1000000 : 0;
+        const markdownScore = root !== element ? 100000 : 0;
+        const bottomScore = rect.bottom;
+        const lengthScore = Math.min(text.length, 8000);
+
+        return roleScore + markdownScore + bottomScore + lengthScore;
+    }
+
+    function getLatestAssistantAnswerContainer() {
+        const site = getSiteName();
+        const selectorsBySite = {
+            ChatGPT: [
+                '[data-message-author-role="assistant"]',
+                '[data-testid*="assistant"]',
+                '.markdown',
+                '.prose'
+            ],
+            Gemini: [
+                "model-response",
+                "message-content",
+                ".message-content",
+                "render-viewer",
+                "[data-response-index]"
+            ],
+            Claude: [
+                '[data-testid*="assistant-message"]',
+                '[data-testid*="message"]',
+                ".font-claude-message",
+                ".prose"
+            ],
+            DeepSeek: [
+                ".ds-markdown",
+                ".markdown",
+                ".prose",
+                "[class*='message']"
+            ],
+            Perplexity: [
+                "article",
+                ".prose",
+                "[class*='answer']"
+            ]
+        };
+
+        const selectors = selectorsBySite[site] || [
+            '[data-message-author-role="assistant"]',
+            ".markdown",
+            ".prose",
+            "article"
+        ];
+
+        const candidates = [];
+        const seen = new Set();
+
+        selectors.forEach((selector) => {
+            try {
+                document.querySelectorAll(selector).forEach((element) => {
+                    if (seen.has(element)) return;
+                    seen.add(element);
+
+                    const score = scoreLatestAssistantCandidate(element);
+                    if (score < 0) return;
+
+                    candidates.push({ element, score });
+                });
+            } catch (error) {
+                console.warn("[AI Prompt Bridge] latest assistant selector failed", selector, error);
+            }
+        });
+
+        if (candidates.length === 0) return null;
+
+        candidates.sort((a, b) => a.score - b.score);
+        return candidates[candidates.length - 1].element;
+    }
+
+    function buildFullSingleAnswerElement(container) {
+        if (!container) return null;
+
+        const contentRoot = getPrimaryContentRoot(container);
+        const clone = cleanRichClone(contentRoot);
+        absolutizeImageSources(clone);
+
+        const text = cleanExportText(clone.innerText || clone.textContent || "");
+        const hasImage = Boolean(clone.querySelector?.("img"));
+        if (text.length < 2 && !hasImage) return null;
+
+        // Do not add any artificial heading such as "Visible AI Answer".
+        clone.setAttribute("data-ai-prompt-bridge-single-answer", "1");
+        return clone;
+    }
+
+
+    function isInsideComposerOrChrome(element) {
+        if (!element || !element.closest) return true;
+        return Boolean(
+            element.closest(`#${PANEL_ID}`) ||
+            element.closest(`#${BUBBLE_ID}`) ||
+            element.closest("#ai-prompt-bridge-startup-probe") ||
+            element.closest("textarea,input,select,form,nav,aside,header,footer,[contenteditable='true']") ||
+            element.closest('[data-testid*="composer"]') ||
+            element.closest('[aria-label*="Message"]') ||
+            element.closest('[aria-label*="訊息"]')
+        );
+    }
+
+    function isUsefulAnswerLine(line) {
+        const text = cleanExportText(line);
+        if (!text) return false;
+        if (text.length < 2) return false;
+
+        const noise = new Set([
+            "複製",
+            "編輯",
+            "分享",
+            "更多",
+            "資料來源",
+            "純文字",
+            "ChatGPT 說",
+            "ChatGPT說",
+            "AI Answer",
+            "Visible AI Answer",
+            "ChatGPT 可能會出錯。請查證重要資訊。"
+        ]);
+
+        if (noise.has(text)) return false;
+        if (/^(copy|copied|edit|share|more|regenerate|read aloud)$/i.test(text)) return false;
+        if (/^Alt\+[A-Za-z]/.test(text)) return false;
+        if (/^https?:\/\//.test(text) && text.length < 120) return false;
+        return true;
+    }
+
+    function getReadableTextElements(root) {
+        if (!root) return [];
+        const selectors = [
+            "h1", "h2", "h3", "h4",
+            "p", "li", "blockquote",
+            "table", "pre"
+        ];
+
+        const out = [];
+        const seen = new Set();
+
+        selectors.forEach((selector) => {
+            try {
+                root.querySelectorAll(selector).forEach((element) => {
+                    if (seen.has(element)) return;
+                    seen.add(element);
+
+                    if (!isVisibleElement(element)) return;
+                    if (isInsideComposerOrChrome(element)) return;
+                    if (element.closest("button,svg")) return;
+
+                    const raw = element.innerText || element.textContent || "";
+                    const text = cleanExportText(raw);
+                    if (!isUsefulAnswerLine(text)) return;
+
+                    const rect = element.getBoundingClientRect();
+                    if (rect.width <= 0 || rect.height <= 0) return;
+
+                    out.push({
+                        element,
+                        text,
+                        top: rect.top,
+                        bottom: rect.bottom,
+                        left: rect.left,
+                        right: rect.right
+                    });
+                });
+            } catch (error) {
+                console.warn("[AI Prompt Bridge] readable selector failed", selector, error);
+            }
+        });
+
+        out.sort((a, b) => a.top - b.top || a.left - b.left);
+        return out;
+    }
+
+    function commonAncestor(a, b) {
+        if (!a) return b || null;
+        if (!b) return a || null;
+        const parents = new Set();
+        let node = a;
+        while (node) {
+            parents.add(node);
+            node = node.parentElement;
+        }
+        node = b;
+        while (node) {
+            if (parents.has(node)) return node;
+            node = node.parentElement;
+        }
+        return null;
+    }
+
+    function buildElementFromLines(lines) {
+        const wrapper = document.createElement("div");
+        wrapper.setAttribute("data-ai-prompt-bridge-single-answer", "1");
+        wrapper.setAttribute("data-ai-prompt-bridge-fallback", "text-lines");
+
+        lines.forEach((line) => {
+            const text = cleanExportText(line);
+            if (!isUsefulAnswerLine(text)) return;
+            const p = document.createElement("p");
+            p.textContent = text;
+            wrapper.appendChild(p);
+        });
+
+        return wrapper.childNodes.length ? wrapper : null;
+    }
+
+    function getLatestAnswerByReadableBlocks() {
+        const main = document.querySelector("main") || document.querySelector('[role="main"]');
+        if (!main) return null;
+
+        const blocks = getReadableTextElements(main);
+        if (!blocks.length) return null;
+
+        const viewportBottom = window.innerHeight;
+        const composerTopCandidates = Array.from(document.querySelectorAll("textarea,[contenteditable='true'],form,[data-testid*='composer']"))
+            .map((el) => el.getBoundingClientRect?.())
+            .filter((rect) => rect && rect.top > 0)
+            .map((rect) => rect.top);
+        const composerTop = composerTopCandidates.length ? Math.min(...composerTopCandidates) : viewportBottom;
+
+        // Prefer blocks above composer and closest to it, which are usually the latest assistant answer.
+        const visibleAnswerBlocks = blocks.filter((b) => b.bottom > 0 && b.top < composerTop - 10);
+        const pool = visibleAnswerBlocks.length ? visibleAnswerBlocks : blocks;
+
+        const anchor = pool[pool.length - 1];
+        if (!anchor) return null;
+
+        // Expand upward within the same visual answer area until a large vertical gap.
+        const selected = [anchor];
+        let lastTop = anchor.top;
+
+        for (let i = pool.length - 2; i >= 0; i -= 1) {
+            const current = pool[i];
+            const gap = lastTop - current.bottom;
+
+            // Stop at large gaps because they usually separate previous answer / cards / images.
+            if (gap > 180 && selected.length > 0) break;
+
+            // Stop before clearly older block far above viewport midline when we already have enough text.
+            if (current.bottom < 0 && selected.length > 0) break;
+
+            selected.unshift(current);
+            lastTop = current.top;
+
+            const chars = selected.reduce((sum, item) => sum + item.text.length, 0);
+            if (chars > 12000) break;
+        }
+
+        // Try to find a common ancestor, but if it looks too broad, use clean text lines instead.
+        let ancestor = null;
+        selected.forEach((item) => {
+            ancestor = commonAncestor(ancestor, item.element);
+        });
+
+        if (ancestor && ancestor !== document.body && ancestor !== document.documentElement && !ancestor.matches?.("main,[role='main']")) {
+            const roles = ancestor.querySelectorAll?.("[data-message-author-role]") || [];
+            const text = cleanExportText(ancestor.innerText || ancestor.textContent || "");
+            if (roles.length <= 1 && text.length <= 60000 && text.length >= 10) {
+                const root = getPrimaryContentRoot(ancestor);
+                const clone = cleanRichClone(root);
+                clone.setAttribute("data-ai-prompt-bridge-single-answer", "1");
+                clone.setAttribute("data-ai-prompt-bridge-fallback", "readable-ancestor");
+                return clone;
+            }
+        }
+
+        return buildElementFromLines(selected.map((item) => item.text));
+    }
+
+
+    function getCurrentVisibleAssistantContainer() {
+        const site = getSiteName();
+        const selectorsBySite = {
+            ChatGPT: [
+                '[data-message-author-role="assistant"]',
+                '[data-testid*="assistant"]',
+                '.markdown',
+                '.prose'
+            ],
+            Gemini: [
+                "model-response",
+                "message-content",
+                ".message-content",
+                "render-viewer",
+                "[data-response-index]"
+            ],
+            Claude: [
+                '[data-testid*="assistant-message"]',
+                '[data-testid*="message"]',
+                ".font-claude-message",
+                ".prose"
+            ],
+            DeepSeek: [
+                ".ds-markdown",
+                ".markdown",
+                ".prose",
+                "[class*='message']"
+            ],
+            Perplexity: [
+                "article",
+                ".prose",
+                "[class*='answer']"
+            ]
+        };
+
+        const selectors = selectorsBySite[site] || [
+            '[data-message-author-role="assistant"]',
+            ".markdown",
+            ".prose",
+            "article"
+        ];
+
+        const candidates = [];
+        const seen = new Set();
+
+        selectors.forEach((selector) => {
+            try {
+                document.querySelectorAll(selector).forEach((element) => {
+                    if (seen.has(element)) return;
+                    seen.add(element);
+
+                    if (!isVisibleElement(element) || isBridgeOrNonContentElement(element)) return;
+                    if (element === document.body || element === document.documentElement) return;
+                    if (element.matches?.("main,[role='main']")) return;
+
+                    const nestedRoles = element.querySelectorAll?.("[data-message-author-role]") || [];
+                    if (nestedRoles.length > 1) return;
+
+                    const text = normalizeText(element.innerText || element.textContent || "");
+                    const hasImage = Boolean(element.querySelector?.("img"));
+                    if (text.length < 10 && !hasImage) return;
+                    if (text.length > 12000) return;
+
+                    const rect = element.getBoundingClientRect();
+                    const ratio = getVisibleRatio(element);
+                    if (ratio <= 0) return;
+
+                    candidates.push({
+                        element,
+                        textLength: text.length,
+                        top: rect.top,
+                        bottom: rect.bottom,
+                        ratio,
+                        hasRole: element.matches?.('[data-message-author-role="assistant"]') ? 1 : 0,
+                        hasMarkdown: element.querySelector?.(".markdown,.prose") ? 1 : 0
+                    });
+                });
+            } catch (error) {
+                console.warn("[AI Prompt Bridge] current visible assistant selector failed", selector, error);
+            }
+        });
+
+        if (candidates.length === 0) return null;
+
+        // The current answer is usually the visible assistant container closest to the composer/bottom.
+        // This avoids copying older visible snippets above the current answer.
+        candidates.sort((a, b) => {
+            const scoreA =
+                a.hasRole * 100000 +
+                a.hasMarkdown * 5000 +
+                Math.min(a.bottom, window.innerHeight) * 10 +
+                a.ratio * 1000 -
+                (a.textLength > 8000 ? 20000 : 0);
+            const scoreB =
+                b.hasRole * 100000 +
+                b.hasMarkdown * 5000 +
+                Math.min(b.bottom, window.innerHeight) * 10 +
+                b.ratio * 1000 -
+                (b.textLength > 8000 ? 20000 : 0);
+            return scoreA - scoreB;
+        });
+
+        return candidates[candidates.length - 1].element;
+    }
+
+    function buildVisibleTextSegmentFromContainer(container) {
+        if (!container) return null;
+
+        const contentRoot = getPrimaryContentRoot(container);
+        const selectors = [
+            "h1",
+            "h2",
+            "h3",
+            "h4",
+            "p",
+            "li",
+            "blockquote",
+            "table"
+        ];
+
+        const blocks = [];
+        const seen = new Set();
+
+        selectors.forEach((selector) => {
+            try {
+                contentRoot.querySelectorAll(selector).forEach((element) => {
+                    if (seen.has(element)) return;
+                    seen.add(element);
+
+                    if (!isVisibleElement(element) || isBridgeOrNonContentElement(element)) return;
+                    if (element.closest("textarea,input,select,form,nav,aside,header,footer")) return;
+                    if (element.closest("pre,code")) return;
+
+                    let text = cleanExportText(element.innerText || element.textContent || "");
+                    if (isNoisyAutoCopyBlockText(text)) return;
+                    if (text.length < 2 || text.length > 5000) return;
+
+                    const rect = element.getBoundingClientRect();
+                    if (rect.bottom < 0 || rect.top > window.innerHeight) return;
+
+                    blocks.push({
+                        text,
+                        tag: element.tagName ? element.tagName.toLowerCase() : "p",
+                        top: rect.top,
+                        bottom: rect.bottom
+                    });
+                });
+            } catch (error) {
+                console.warn("[AI Prompt Bridge] visible segment selector failed", selector, error);
+            }
+        });
+
+        if (blocks.length === 0) {
+            const text = cleanExportText(contentRoot.innerText || contentRoot.textContent || "");
+            if (!text || text.length < 10 || text.length > 8000) return null;
+            const wrapper = document.createElement("div");
+            wrapper.setAttribute("data-ai-prompt-bridge-fallback", "visible-current-answer");
+            const p = document.createElement("p");
+            p.textContent = text;
+            wrapper.appendChild(p);
+            return wrapper;
+        }
+
+        blocks.sort((a, b) => a.top - b.top);
+
+        // Start from the first actually visible meaningful block in the current assistant answer.
+        // This prevents copying the code block label "純文字", "ChatGPT 說", and older upper snippets.
+        const firstIndex = blocks.findIndex((block) => {
+            const t = cleanExportText(block.text);
+            return t.length >= 6 && !isNoisyAutoCopyBlockText(t);
+        });
+
+        const chosen = blocks.slice(firstIndex >= 0 ? firstIndex : 0);
+        let total = 0;
+        const limited = [];
+        chosen.forEach((block) => {
+            if (total > 7000) return;
+            limited.push(block);
+            total += block.text.length;
+        });
+
+        if (limited.length === 0) return null;
+
+        const wrapper = document.createElement("div");
+        wrapper.setAttribute("data-ai-prompt-bridge-fallback", "visible-current-answer");
+
+        limited.forEach((block) => {
+            let tag = ["h1", "h2", "h3", "h4", "blockquote"].includes(block.tag) ? block.tag : "p";
+            const el = document.createElement(tag);
+            el.textContent = cleanExportText(block.text);
+            if (el.textContent) wrapper.appendChild(el);
+        });
+
+        return wrapper.childNodes.length ? wrapper : null;
+    }
+
+    function getAltWRichCopyTarget() {
+        const selectedContainer = getSelectionHtml();
+        if (selectedContainer) {
+            return { element: selectedContainer, source: "selection" };
+        }
+
+        // Alt+W means: copy the latest assistant answer as one complete answer.
+        // Primary path: stable assistant message markers.
+        const latestContainer = getLatestAssistantAnswerContainer();
+        const fullAnswer = buildFullSingleAnswerElement(latestContainer);
+        if (fullAnswer) {
+            return { element: fullAnswer, source: "latest-full-answer" };
+        }
+
+        // Fallback path for ChatGPT layouts that no longer expose stable assistant markers.
+        // This uses visible readable blocks near the composer instead of returning an error.
+        const readableFallback = getLatestAnswerByReadableBlocks();
+        if (readableFallback) {
+            return { element: readableFallback, source: "readable-block-fallback" };
+        }
+
+        return null;
+    }
 
     function getSelectionHtml() {
         try {
@@ -1052,19 +1796,14 @@
 
         if (site === "ChatGPT") {
             selectors = [
-                '[data-message-author-role="assistant"]',
                 '[data-message-author-role="assistant"] .markdown',
-                '[data-testid*="conversation-turn"]',
-                '[data-testid*="assistant"]',
-                '[class*="group/conversation-turn"]',
-                "article",
-                ".agent-turn",
+                '[data-message-author-role="assistant"] .prose',
+                '[data-message-author-role="assistant"]',
+                '[data-testid*="assistant"] .markdown',
+                '[data-testid*="assistant"] .prose',
                 ".agent-turn .markdown",
                 ".markdown",
-                ".prose",
-                "main article",
-                "main [class*='markdown']",
-                "main [class*='prose']"
+                ".prose"
             ];
         } else if (site === "Gemini") {
             selectors = [
@@ -1073,42 +1812,35 @@
                 "model-response",
                 "render-viewer",
                 "[data-response-index]",
-                ".conversation-container",
-                "main article",
                 ".markdown",
                 ".prose"
             ];
         } else if (site === "Claude") {
             selectors = [
+                '[data-testid*="message"] .prose',
                 '[data-testid*="message"]',
                 ".font-claude-message",
                 ".prose",
-                ".markdown",
-                "[class*='message']"
+                ".markdown"
             ];
         } else if (site === "DeepSeek") {
             selectors = [
                 ".ds-markdown",
                 ".markdown",
                 ".prose",
-                "[class*='markdown']",
-                "[class*='message']"
+                "[class*='markdown']"
             ];
         } else if (site === "Perplexity") {
             selectors = [
                 ".prose",
                 "[class*='answer']",
-                "[class*='markdown']",
-                "main article"
+                "[class*='markdown']"
             ];
         } else {
             selectors = [
                 ".markdown",
                 ".prose",
-                "article",
-                "[class*='markdown']",
-                "[class*='message']",
-                "main article"
+                "[class*='markdown']"
             ];
         }
 
@@ -1122,9 +1854,10 @@
                     seen.add(element);
 
                     if (!isVisibleElement(element) || isBridgeOrNonContentElement(element)) return;
+                    if (isLikelyWholeSessionElement(element)) return;
 
                     const text = normalizeText(element.innerText || element.textContent || "");
-                    if (text.length > 20) {
+                    if (text.length > 20 && text.length <= 8000) {
                         const rect = element.getBoundingClientRect();
                         candidates.push({
                             element,
@@ -1142,8 +1875,18 @@
 
         if (candidates.length > 0) {
             candidates.sort((a, b) => {
-                const scoreA = a.isAssistant * 100000 + a.isMarkdown * 50000 + a.bottom + Math.min(a.textLength, 5000);
-                const scoreB = b.isAssistant * 100000 + b.isMarkdown * 50000 + b.bottom + Math.min(b.textLength, 5000);
+                const scoreA =
+                    a.isAssistant * 100000 +
+                    a.isMarkdown * 50000 +
+                    a.bottom +
+                    Math.min(a.textLength, 2000) -
+                    (a.textLength > 4000 ? 20000 : 0);
+                const scoreB =
+                    b.isAssistant * 100000 +
+                    b.isMarkdown * 50000 +
+                    b.bottom +
+                    Math.min(b.textLength, 2000) -
+                    (b.textLength > 4000 ? 20000 : 0);
                 return scoreA - scoreB;
             });
             return candidates[candidates.length - 1].element;
@@ -1151,8 +1894,14 @@
 
         const fallback = getVisibleContentFallbackElement();
         if (fallback) {
-            console.warn("[AI Prompt Bridge] latest answer selectors missed; using visible content fallback");
+            console.warn("[AI Prompt Bridge] latest answer selectors missed; using single visible answer fallback");
             return fallback;
+        }
+
+        const textFallback = getVisibleSingleAnswerTextFallbackElement();
+        if (textFallback) {
+            console.warn("[AI Prompt Bridge] latest answer selectors missed; using visible text-block fallback");
+            return textFallback;
         }
 
         return null;
@@ -1192,6 +1941,367 @@
         return role || "Message";
     }
 
+    function paragraphizeText(text) {
+        const raw = safeText(text).replace(/\r\n/g, "\n");
+        const lines = raw.split("\n");
+        const paragraphs = [];
+        let buffer = [];
+
+        const flush = () => {
+            const joined = cleanExportText(buffer.join("\n"));
+            if (joined) paragraphs.push(joined);
+            buffer = [];
+        };
+
+        lines.forEach((line) => {
+            const clean = cleanExportText(line);
+            if (!clean || isNoisyAutoCopyBlockText(clean)) {
+                flush();
+                return;
+            }
+
+            // Preserve explicit markdown headings / bullets / numbered lines as separate blocks.
+            if (
+                /^#{1,6}\s+/.test(clean) ||
+                /^[-*•]\s+/.test(clean) ||
+                /^\d+[.)]\s+/.test(clean) ||
+                /^>/.test(clean)
+            ) {
+                flush();
+                paragraphs.push(clean);
+                return;
+            }
+
+            buffer.push(clean);
+        });
+
+        flush();
+        return paragraphs;
+    }
+
+    function appendTextBlockWithOfficeStyle(parent, line) {
+        const clean = cleanExportText(line);
+        if (!clean || isNoisyAutoCopyBlockText(clean)) return;
+
+        let el = null;
+
+        if (/^#{1,6}\s+/.test(clean)) {
+            const level = Math.min(4, (clean.match(/^#+/) || ["##"])[0].length);
+            el = document.createElement(`h${level}`);
+            el.textContent = clean.replace(/^#{1,6}\s+/, "");
+        } else if (/^>/.test(clean)) {
+            el = document.createElement("blockquote");
+            el.textContent = clean.replace(/^>\s?/, "");
+            el.style.borderLeft = "4px solid #d1d5db";
+            el.style.paddingLeft = "12px";
+            el.style.margin = "8px 0";
+        } else {
+            el = document.createElement("p");
+            el.textContent = clean;
+        }
+
+        parent.appendChild(el);
+    }
+
+    function cleanOfficeExportElement(root) {
+        if (!root || !root.querySelectorAll) return root;
+
+        const killSelectors = [
+            "button",
+            "svg",
+            "textarea",
+            "input",
+            "select",
+            "form",
+            "nav",
+            "aside",
+            "header",
+            "footer",
+            "[contenteditable='true']",
+            "[data-testid*='composer']",
+            "[aria-label*='Message']",
+            "[aria-label*='訊息']",
+            `#${PANEL_ID}`,
+            `#${BUBBLE_ID}`,
+            "#ai-prompt-bridge-startup-probe"
+        ];
+
+        killSelectors.forEach((selector) => {
+            try {
+                root.querySelectorAll(selector).forEach((node) => node.remove());
+            } catch (_) {}
+        });
+
+        // Remove empty/noisy text-only blocks.
+        root.querySelectorAll("p,div,span,li,h1,h2,h3,h4,h5,h6,blockquote,pre,code").forEach((node) => {
+            const text = cleanExportText(node.innerText || node.textContent || "");
+            const hasMeaningfulMedia = Boolean(node.querySelector?.("img,table"));
+            if (!text && !hasMeaningfulMedia) {
+                node.remove();
+                return;
+            }
+            if (isNoisyAutoCopyBlockText(text) && !hasMeaningfulMedia) {
+                node.remove();
+            }
+        });
+
+        applyOneNoteInlineStyles(root);
+        return root;
+    }
+
+
+    function textToRichBlock(text) {
+        const body = document.createElement("div");
+        const paragraphs = paragraphizeText(text);
+        let list = null;
+        let orderedList = null;
+
+        const flushLists = () => {
+            if (list) {
+                body.appendChild(list);
+                list = null;
+            }
+            if (orderedList) {
+                body.appendChild(orderedList);
+                orderedList = null;
+            }
+        };
+
+        paragraphs.forEach((line) => {
+            const clean = cleanExportText(line);
+            if (!clean || isNoisyAutoCopyBlockText(clean)) {
+                flushLists();
+                return;
+            }
+
+            if (/^#{1,6}\s+/.test(clean)) {
+                flushLists();
+                appendTextBlockWithOfficeStyle(body, clean);
+                return;
+            }
+
+            if (/^[-*•]\s+/.test(clean)) {
+                orderedList = null;
+                if (!list) list = document.createElement("ul");
+                const li = document.createElement("li");
+                li.textContent = clean.replace(/^[-*•]\s+/, "");
+                list.appendChild(li);
+                return;
+            }
+
+            if (/^\d+[.)]\s+/.test(clean)) {
+                list = null;
+                if (!orderedList) orderedList = document.createElement("ol");
+                const li = document.createElement("li");
+                li.textContent = clean.replace(/^\d+[.)]\s+/, "");
+                orderedList.appendChild(li);
+                return;
+            }
+
+            flushLists();
+
+            if (clean.startsWith("[Image:")) {
+                const p = document.createElement("p");
+                p.textContent = clean;
+                p.style.fontStyle = "italic";
+                body.appendChild(p);
+                return;
+            }
+
+            appendTextBlockWithOfficeStyle(body, clean);
+        });
+
+        flushLists();
+        cleanOfficeExportElement(body);
+        return body;
+    }
+
+    function normalizeChatTranscriptMarkers(rawText) {
+        let text = safeText(rawText).replace(/\r\n/g, "\n");
+
+        // Add line breaks around compact ChatGPT transcript markers.
+        text = text
+            .replace(/(正在載入較早的訊息…|正在載入較早的訊息\.\.\.)/g, "\n")
+            .replace(/(\d{4}年\d{1,2}月\d{1,2}日\s*(?:上午|下午)\s*\d{1,2}:\d{2})/g, "\n$1\n")
+            .replace(/(\d{1,2}月\d{1,2}日週[一二三四五六日天]\s*(?:上午|下午)\d{1,2}:\d{2})/g, "\n$1\n")
+            .replace(/你說：/g, "\n__ROLE_USER__\n")
+            .replace(/ChatGPT\s*說：/g, "\n__ROLE_ASSISTANT__\n")
+            .replace(/Gemini\s*說：/g, "\n__ROLE_ASSISTANT__\n")
+            .replace(/Claude\s*說：/g, "\n__ROLE_ASSISTANT__\n")
+            .replace(/DeepSeek\s*說：/g, "\n__ROLE_ASSISTANT__\n");
+
+        return text;
+    }
+
+    function parseRoleBlocksFromText(rawText) {
+        const text = normalizeChatTranscriptMarkers(rawText);
+        const lines = text.split("\n").map((line) => line.trim());
+        const blocks = [];
+        let currentRole = null;
+        let buffer = [];
+
+        const flush = () => {
+            const body = cleanExportText(buffer.join("\n"));
+            if (currentRole && body && body.length >= 2 && !isNoisyAutoCopyBlockText(body)) {
+                blocks.push({ role: currentRole, text: body });
+            }
+            buffer = [];
+        };
+
+        lines.forEach((line) => {
+            if (!line) return;
+
+            if (line === "__ROLE_USER__") {
+                flush();
+                currentRole = "user";
+                return;
+            }
+
+            if (line === "__ROLE_ASSISTANT__") {
+                flush();
+                currentRole = "assistant";
+                return;
+            }
+
+            // Drop standalone timestamps and UI lines.
+            const cleaned = cleanExportText(line);
+            if (!cleaned || isNoisyAutoCopyBlockText(cleaned)) {
+                return;
+            }
+
+            if (!currentRole) {
+                // Before the first role marker, ignore navigation/date residue.
+                return;
+            }
+
+            buffer.push(cleaned);
+        });
+
+        flush();
+
+        // Remove duplicate adjacent blocks caused by mirrored DOM text.
+        const deduped = [];
+        const seen = new Set();
+        blocks.forEach((block) => {
+            const key = `${block.role}:${block.text.slice(0, 500)}`;
+            if (seen.has(key)) return;
+            seen.add(key);
+            deduped.push(block);
+        });
+
+        return deduped;
+    }
+
+    function getSessionBlocksFromDom() {
+        const blocks = [];
+        const seen = new Set();
+
+        try {
+            const roleNodes = Array.from(document.querySelectorAll('[data-message-author-role]'));
+            roleNodes.forEach((node) => {
+                const role = node.getAttribute("data-message-author-role") || "message";
+                if (!["user", "assistant", "tool"].includes(role)) return;
+
+                const root = getPrimaryContentRoot(node);
+                const text = cleanExportText(root.innerText || root.textContent || "");
+                const hasImage = Boolean(root.querySelector?.("img"));
+                if ((!text || text.length < 2) && !hasImage) return;
+
+                const key = `${role}:${text.slice(0, 500)}`;
+                if (seen.has(key)) return;
+                seen.add(key);
+
+                blocks.push({ role, text, node: root });
+            });
+        } catch (error) {
+            console.warn("[AI Prompt Bridge] DOM session block extraction failed", error);
+        }
+
+        return blocks;
+    }
+
+    function getFullSessionBlocks() {
+        const domBlocks = getSessionBlocksFromDom();
+        if (domBlocks.length >= 2) return domBlocks;
+
+        const main = document.querySelector("main") || document.querySelector('[role="main"]') || document.body;
+        const raw = safeText(main?.innerText || document.body.innerText || "");
+        const parsed = parseRoleBlocksFromText(raw);
+
+        if (parsed.length >= 1) return parsed;
+
+        const rawSession = getCurrentSessionText();
+        return parseRoleBlocksFromText(rawSession);
+    }
+
+    function roleBlocksToRawBlocks(blocks) {
+        return blocks
+            .map((block) => {
+                const role = block.role || "message";
+                const text = cleanExportText(block.text || "");
+                if (!text) return "";
+                return `## ${role}\n${text}`;
+            })
+            .filter(Boolean);
+    }
+
+
+    function splitRawSessionIntoBlocks(rawText) {
+        const parsed = parseRoleBlocksFromText(rawText);
+        if (parsed.length >= 1) {
+            return roleBlocksToRawBlocks(parsed);
+        }
+
+        const text = safeText(rawText).replace(/\r\n/g, "\n").trim();
+        if (!text) return [];
+
+        const byRule = text
+            .split(/\n\s*---\s*\n/g)
+            .map((x) => cleanExportText(x.trim()))
+            .filter((block) => {
+                if (!block) return false;
+                if (/^##\s+\w+\s*$/i.test(block)) return false;
+                if (isNoisyAutoCopyBlockText(block)) return false;
+                return block.length >= 2;
+            });
+
+        return byRule.length ? byRule : [cleanExportText(text)].filter(Boolean);
+    }
+
+    function createTranscriptBlockFromText(rawBlock, index) {
+        let role = "message";
+        let bodyText = cleanExportText(rawBlock.trim());
+
+        const roleMatch = bodyText.match(/^##\s+([A-Za-z\u4e00-\u9fff_-]+)\s*\n([\s\S]*)$/);
+        if (roleMatch) {
+            role = roleMatch[1].toLowerCase();
+            bodyText = cleanExportText(roleMatch[2].trim());
+        }
+
+        if (!bodyText || isNoisyAutoCopyBlockText(bodyText)) {
+            return null;
+        }
+
+        const section = document.createElement("section");
+        section.setAttribute("data-ai-prompt-bridge-message", String(index + 1));
+        section.setAttribute("style", "margin:14px 0 18px 0;padding:8px 0 12px 0;border-bottom:1px solid #e5e7eb;max-width:980px;white-space:normal;");
+
+        const heading = document.createElement("h3");
+        heading.textContent = `${index + 1}. ${getRoleLabel(role)}`;
+        heading.setAttribute("style", "font-weight:700;margin:8px 0 10px;color:#111111;font-size:18pt;line-height:1.35;");
+        section.appendChild(heading);
+
+        const body = textToRichBlock(bodyText);
+        if (!cleanExportText(body.innerText || body.textContent || "")) {
+            return null;
+        }
+        applyOneNoteInlineStyles(body);
+        section.appendChild(body);
+
+        return section;
+    }
+
+
     function createTranscriptBlock(role, sourceNode, index) {
         const section = document.createElement("section");
         section.setAttribute("data-ai-prompt-bridge-message", String(index + 1));
@@ -1216,11 +2326,12 @@
             const role = node.getAttribute("data-message-author-role") || "";
             if (!["user", "assistant", "tool"].includes(role)) return;
 
-            const text = normalizeText(node.innerText || node.textContent || "");
-            const hasImage = node.querySelector("img");
+            const root = getPrimaryContentRoot(node);
+            const text = cleanExportText(root.innerText || root.textContent || "");
+            const hasImage = root.querySelector("img");
             if (text.length < 2 && !hasImage) return;
 
-            nodes.push({ role, node });
+            nodes.push({ role, node: root });
         });
         return nodes;
     }
@@ -1283,32 +2394,26 @@
     }
 
     function buildFullSessionTranscriptElement() {
-        const site = getSiteName();
-        let nodes = [];
-
-        if (site === "ChatGPT") {
-            nodes = collectChatGPTTranscriptNodes();
-        }
-
-        if (nodes.length < 2) {
-            nodes = collectGenericTranscriptNodes();
-        }
-
         const transcript = document.createElement("div");
         transcript.setAttribute("data-ai-prompt-bridge-transcript", "1");
 
-        if (nodes.length >= 1) {
-            nodes.forEach((item, index) => {
-                transcript.appendChild(createTranscriptBlock(item.role, item.node, index));
+        const sessionBlocks = getFullSessionBlocks();
+        const blocks = sessionBlocks.length >= 1
+            ? roleBlocksToRawBlocks(sessionBlocks)
+            : splitRawSessionIntoBlocks(getCurrentSessionText());
+
+        if (blocks.length >= 1) {
+            let realIndex = 0;
+            blocks.forEach((block) => {
+                const section = createTranscriptBlockFromText(block, realIndex);
+                if (section) {
+                    transcript.appendChild(section);
+                    realIndex += 1;
+                }
             });
             return transcript;
         }
 
-        const fallbackRoot = document.querySelector("main") || document.querySelector('[role="main"]') || document.body || document.documentElement;
-        const fallback = cleanRichClone(fallbackRoot);
-        absolutizeImageSources(fallback);
-        applyOneNoteInlineStyles(fallback);
-        transcript.appendChild(fallback);
         return transcript;
     }
 
@@ -1317,7 +2422,7 @@
         const walk = (node) => {
             if (!node) return;
             if (node.nodeType === Node.TEXT_NODE) {
-                const text = normalizeText(node.textContent || "");
+                const text = cleanExportText(node.textContent || "");
                 if (text) lines.push(text);
                 return;
             }
@@ -1361,6 +2466,8 @@
         } catch (_) {}
 
         const transcript = buildFullSessionTranscriptElement();
+        cleanOfficeExportElement(transcript);
+
         const messageCount = transcript.querySelectorAll("[data-ai-prompt-bridge-message]").length;
         const textContent = richElementToPlainText(transcript);
 
@@ -1373,26 +2480,10 @@
             console.warn("[AI Prompt Bridge] full-session export captured only one message. The page may not have loaded older messages yet.");
         }
 
-        const headerHtml = [
-            `<h1>AI Session Export</h1>`,
-            `<p><strong>Source:</strong> ${escapeHtml(getSiteName())}</p>`,
-            `<p><strong>Captured At:</strong> ${escapeHtml(nowText())}</p>`,
-            `<p><strong>URL:</strong> ${escapeHtml(location.href)}</p>`,
-            `<p><strong>Messages:</strong> ${messageCount || "unknown"}</p>`,
-            `<hr>`
-        ].join("");
-
-        const htmlContent = normalizeRichHtml(headerHtml + transcript.innerHTML);
-
-        const plainText = [
-            "# AI Session Export",
-            `Source: ${getSiteName()}`,
-            `Captured_At: ${nowText()}`,
-            `URL: ${location.href}`,
-            `Messages: ${messageCount || "unknown"}`,
-            "",
-            textContent
-        ].join("\n");
+        // v1.28: Do not add AI Session Export / Source / URL metadata to OneNote/Word.
+        // The user wants clean content only.
+        const htmlContent = normalizeRichHtml(transcript.innerHTML);
+        const plainText = textContent;
 
         try {
             if (typeof ClipboardItem !== "undefined" && navigator.clipboard?.write) {
@@ -1708,19 +2799,24 @@ ${body}
     }
 
     async function copyRichTextForOffice() {
-        const selectedContainer = getSelectionHtml();
-        const targetElement = selectedContainer || getLatestAnswerElement();
+        const target = getAltWRichCopyTarget();
 
-        if (!targetElement) {
-            alert("沒有找到可複製的 AI 回答。請先手動選取要複製的段落，或按 Alt+S / Alt+N 複製整個 session。");
+        if (!target || !target.element) {
+            alert("Alt+W 仍沒有找到最新 AI 回答。請手動框選要複製的段落後再按 Alt+W；完整 session 請用 Alt+N。");
             return;
         }
 
-        const clone = cleanRichClone(targetElement);
+        if (target.source !== "selection" && isLikelyWholeSessionElement(target.element)) {
+            alert("Alt+W 只複製單段內容。偵測到候選內容像完整 session，已停止複製。請手動框選單段後再按 Alt+W；完整 session 請用 Alt+N。");
+            return;
+        }
+
+        const clone = cleanRichClone(target.element);
         absolutizeImageSources(clone);
+        cleanOfficeExportElement(clone);
         const textContent = richElementToPlainText(clone);
 
-        if (!textContent) {
+        if (!textContent || textContent.length < 2) {
             alert("抓到的內容是空的，請改用手動選取後再按 Alt+W。");
             return;
         }
@@ -1736,14 +2832,14 @@ ${body}
                         "text/plain": new Blob([textContent], { type: "text/plain" })
                     })
                 ]);
-                toast(`Alt+W 單段已複製到 OneNote / Word：${textContent.length} 字`);
+                toast(`Alt+W 已複製最新回答整段到 OneNote / Word：${textContent.length} 字`);
                 return;
             }
         } catch (error) {
             console.warn("[AI Prompt Bridge] rich clipboard failed, fallback to plain text", error);
         }
 
-        await copyText(textContent, `Alt+W 已降級複製純文字（${textContent.length} 字）`);
+        await copyText(textContent, `Alt+W 已降級複製最新回答純文字（${textContent.length} 字）`);
     }
 
 
@@ -2101,8 +3197,8 @@ ${body}
         content.appendChild(createButton("⑦ Alt+S 全 Session 原始純文字", copyFullSessionRawText, "#be123c"));
         content.appendChild(createButton("⑨ Alt+N 全 Session → OneNote/Word 20pt", () => copyFullSessionRichTextForOffice("Alt+N"), "#d97706"));
         content.appendChild(createButton("⑫ 整理成筆記 Prompt Alt+Shift+N", () => copyPrompt(buildOneNotePrompt, "已複製 OneNote 筆記整理 Prompt"), "#92400e"));
-        content.appendChild(createButton("⑩ Alt+W 單段 → OneNote/Word 20pt", copyRichTextForOffice, "#0891b2"));
-        content.appendChild(createButton("⑪ Alt+Shift+W 全 Session → OneNote/Word", () => copyFullSessionRichTextForOffice("Alt+Shift+W"), "#0e7490"));
+        content.appendChild(createButton("⑩ Alt+W 最新回答整段 → OneNote/Word", copyRichTextForOffice, "#0891b2"));
+        content.appendChild(createButton("⑪ 全 Session → OneNote/Word 備用按鈕", () => copyFullSessionRichTextForOffice("Button"), "#0e7490"));
         content.appendChild(createButton("⑧ 重置面板位置", async () => {
             const p = document.getElementById(PANEL_ID);
             if (p) {
@@ -2113,7 +3209,7 @@ ${body}
         }, "#0f766e"));
 
         const hint = document.createElement("div");
-        hint.textContent = "Alt+S=全Session原文 / Alt+W=單段格式 / Alt+N=全Session到OneNote";
+        hint.textContent = "Alt+W=最新回答整段 / Alt+N=全Session到OneNote / Alt+S=全Session原文";
         hint.style.fontSize = "11px";
         hint.style.color = "#d1d5db";
         hint.style.marginTop = "2px";
@@ -2200,7 +3296,7 @@ ${body}
             event.preventDefault();
             event.stopPropagation();
             event.stopImmediatePropagation();
-            await copyFullSessionRichTextForOffice("Alt+Shift+W");
+            await copyRichTextForOffice();
         }
 
         if (event.altKey && !event.shiftKey && !event.ctrlKey && (key === "w" || code === "KeyW")) {
@@ -2268,4 +3364,3 @@ ${body}
         setTimeout(ensurePanel, 2000);
     });
 })();
-
