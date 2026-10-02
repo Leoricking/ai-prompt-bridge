@@ -1,4 +1,4 @@
-# AI Prompt Bridge v1.28
+# AI Prompt Bridge v1.34
 
 AI Prompt Bridge 是一個 Tampermonkey userscript，用來在 ChatGPT、Gemini、Claude、DeepSeek、Perplexity、Qwen、Cursor 等頁面之間快速搬運內容、生成 review prompt、生成 Cursor fix prompt、整理筆記，以及複製 Word / OneNote 可用的乾淨富文本。
 
@@ -1457,5 +1457,307 @@ git commit -m "fix: improve Alt+N full-session Office export layout" -m "- Impro
 - Keep each user and assistant message as a readable Office section.
 - Remove loading text, code-block labels, auto-wrap labels, and ChatGPT footer noise from exports.
 - Constrain Office HTML width and paragraph layout for better OneNote and Word readability.
+- Keep Alt+W and Alt+Shift+W latest-answer behavior unchanged."
+```
+
+---
+
+## v1.29：Alt+N 保留 ChatGPT 版面排版
+
+v1.29 針對 Alt+N 貼到 OneNote / Word 後「不像 ChatGPT、字太大、橫向爆版、出現 1. User / 2. Assistant」的問題修正。
+
+### 修正重點
+
+```text
+1. Alt+N 優先使用每則訊息的原始 DOM rich content。
+2. 不再把整個 session 先轉成純文字再重建。
+3. 不再輸出 1. User / 2. Assistant 這種人工大標題。
+4. 保留 ChatGPT 原本的段落、粗體、清單、引用、表格與 code block 結構。
+5. 加上 Office 安全樣式：
+   - max-width: 980px
+   - white-space: normal
+   - word-break: break-word
+   - overflow-wrap: anywhere
+   避免貼到 OneNote 後橫向爆版。
+6. Alt+W 維持原本正常邏輯，不改行為。
+```
+
+### 快捷鍵
+
+```text
+Alt+W：最新 AI 回答整段 → Word / OneNote
+Alt+Shift+W：同 Alt+W
+Alt+N：完整已載入 session → Word / OneNote，保留 ChatGPT-like 排版
+Alt+S：完整已載入 session → 原始純文字
+```
+
+---
+
+## v1.29 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "fix: preserve ChatGPT layout in Alt+N Office export" -m "- Make Alt+N full-session rich export preserve each message DOM instead of rebuilding oversized plain text.
+- Remove artificial numbered User and Assistant headings from Alt+N rich output.
+- Keep ChatGPT-like paragraphs, lists, blockquotes, tables, and code blocks when copying to OneNote or Word.
+- Add Office-safe width, wrapping, and word-break styles to prevent horizontal overflow.
+- Keep Alt+W and Alt+Shift+W latest-answer rich copy behavior unchanged."
+```
+
+---
+
+## v1.30：Alt+N 強制 DOM Rich Export 修正版
+
+v1.30 針對 Alt+N 貼到 OneNote / Word 仍然變成純文字、出現 User / Assistant、段落擠在一起的問題修正。
+
+### 問題原因
+
+部分 ChatGPT 頁面沒有穩定的 `[data-message-author-role]`，v1.29 會退回文字解析模式。  
+文字解析模式只能拿到 plain text，因此會失去 ChatGPT 原本的清單縮排、粗體、段落與引用排版。
+
+### v1.30 修正
+
+```text
+1. Alt+N 不再只依賴 [data-message-author-role]。
+2. 新增 DOM rich candidates：
+   - article
+   - [data-testid*="conversation-turn"]
+   - [data-testid*="message"]
+   - [class*="conversation-turn"]
+3. 每則訊息優先複製其 markdown / prose / rich content root。
+4. 只有完全抓不到 DOM 訊息時才退回 plain text。
+5. 移除 text fallback 裡的人工 User / Assistant 標題。
+6. Alt+W / Alt+Shift+W 不改行為。
+```
+
+### 驗收標準
+
+```text
+Alt+N 貼到 OneNote / Word：
+- 不應出現 User / Assistant 人工標題
+- 不應整篇變成一大段純文字
+- 應保留 ChatGPT 的清單、粗體、段落、引用
+- 不應橫向爆版
+```
+
+---
+
+## v1.30 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "fix: force DOM-rich Alt+N session export" -m "- Add DOM-rich message candidate extraction for ChatGPT layouts without stable role markers.
+- Preserve markdown and prose content roots for Alt+N full-session Office export.
+- Avoid plain-text User and Assistant fallback when rich DOM messages are available.
+- Remove artificial fallback role labels from Alt+N output.
+- Keep Alt+W and Alt+Shift+W latest-answer rich copy behavior unchanged."
+```
+
+---
+
+## v1.31：Alt+N 改成「全 Session 版 Alt+W」
+
+v1.31 針對 Alt+N 仍然把內容變成純文字、User 問題消失或混在同一段的問題做收斂修正。
+
+### 核心定義
+
+```text
+Alt+W：複製最新一則 AI 回答整段 rich DOM。
+Alt+N：複製目前已載入 session 內每一則 user / assistant 訊息的 rich DOM。
+```
+
+也就是：Alt+N 是「全 session 版 Alt+W」，不是再把整頁文字 parse 成純文字。
+
+### v1.31 修正重點
+
+```text
+1. Alt+N 優先收集所有已載入的 [data-message-author-role] 訊息。
+2. 每一則 user / assistant 都用 Alt+W 類似方式 clone rich DOM。
+3. User 問題會以 ChatGPT-like 右側淺藍 bubble 保留，不再消失。
+4. Assistant 回答保留原本段落、粗體、清單、表格、引用與 code block。
+5. 只有完全抓不到 rich DOM 時才退回文字 fallback。
+6. Alt+W / Alt+Shift+W 不改行為。
+```
+
+### 驗收標準
+
+```text
+Alt+N 貼到 OneNote / Word：
+- 需要看到 user 問句
+- 需要看到 assistant 回答
+- 不應出現人工 User / Assistant 大標題
+- 不應全部變成一大段純文字
+- 排版要接近 ChatGPT 畫面
+```
+
+---
+
+## v1.31 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "fix: make Alt+N a full-session rich copy" -m "- Treat Alt+N as the full-session version of Alt+W.
+- Clone each loaded user and assistant message as rich DOM instead of parsing the whole page as plain text.
+- Preserve user prompts as ChatGPT-like right-side bubbles in Word and OneNote exports.
+- Preserve assistant paragraphs, bold text, lists, tables, blockquotes, and code blocks.
+- Keep Alt+W and Alt+Shift+W latest-answer rich copy behavior unchanged."
+```
+
+---
+
+## v1.32：Alt+N 固定輸出 User + ChatGPT 對話版
+
+v1.32 針對 Alt+N 仍然變成一大段、User 問句不見、或 assistant 排版消失的問題做收斂修正。
+
+### 這版的固定規則
+
+```text
+Alt+N = 全 session 版 Alt+W
+但不再 clone broad conversation container。
+```
+
+### 修正重點
+
+```text
+1. Alt+N 優先讀官方 [data-message-author-role]：
+   - user 保留成 ChatGPT-like 淺藍 bubble
+   - assistant 保留 rich DOM 排版
+
+2. 如果官方 role DOM 不存在：
+   - 改解析目前 main.innerText
+   - 用「你說：」「ChatGPT 說：」切成 user / assistant
+   - 保留換行、標題、清單、縮排，不再全部 normalize 成一段
+
+3. 禁止再 clone broad conversation container：
+   - 這是之前變成一大坨純文字的原因。
+
+4. Alt+W / Alt+Shift+W 不改。
+```
+
+### 驗收標準
+
+```text
+Alt+N 貼到 OneNote / Word：
+- 必須看到 user 問句，例如：
+  「蛋白質 要吃什麼 像蜂蜜這樣 便宜 方便又健康」
+- 接著看到 ChatGPT 回答。
+- Assistant 的清單、粗體、段落盡量接近 ChatGPT 畫面。
+- 不應只剩一大段文字。
+```
+
+---
+
+## v1.32 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "fix: export Alt+N as user assistant chat blocks" -m "- Make Alt+N export loaded sessions as user and assistant chat blocks.
+- Prefer official data-message-author-role DOM for accurate user prompts and assistant rich layout.
+- Preserve multiline text structure when falling back to raw transcript parsing.
+- Stop cloning broad conversation containers that caused one giant plain-text block.
+- Keep Alt+W and Alt+Shift+W latest-answer rich copy behavior unchanged."
+```
+
+---
+
+## v1.33：Alt+N 修正缺失 content root 與 bubble 樣式被清掉
+
+v1.33 針對 v1.32 仍然排版混亂的問題修正。
+
+### 根因
+
+```text
+1. v1.32 呼叫 getMessageContentRoot()，但該 helper 沒有穩定定義在最終檔案裡，會導致 Alt+N 走錯 fallback。
+2. Alt+N 建好 user bubble 後，又對整個 transcript 做 cleanOfficeExportElement()，會把 bubble / message 樣式洗掉。
+3. user prompt 不應 clone broad wrapper，應直接用乾淨文字建立右側 bubble。
+```
+
+### v1.33 修正
+
+```text
+1. 新增穩定 getMessageContentRoot()。
+2. Alt+N 每則 assistant 優先抓 markdown/prose rich root。
+3. Alt+N user prompt 改用乾淨文字建立 ChatGPT-like bubble。
+4. 移除 transcript-level cleanOfficeExportElement()，避免 user bubble 樣式被清掉。
+5. Alt+W / Alt+Shift+W 不改。
+```
+
+### 驗收
+
+```text
+Alt+N 貼到 OneNote / Word 應看到：
+- user 問句在淺藍 bubble
+- assistant 回答保留清單 / 粗體 / 段落
+- 不應是一整坨純文字
+```
+
+---
+
+## v1.33 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "fix: preserve Alt+N chat layout and user prompts" -m "- Add stable getMessageContentRoot helper for Alt+N session export.
+- Build user prompts as clean ChatGPT-like bubbles instead of cloning broad wrappers.
+- Preserve assistant markdown and prose roots for rich Office output.
+- Avoid transcript-level cleanup that stripped bubble and message layout styles.
+- Keep Alt+W and Alt+Shift+W latest-answer behavior unchanged."
+```
+
+---
+
+## v1.34：Alt+N Structured DOM 排版修正版
+
+v1.34 針對 Alt+N 貼到 OneNote / Word 後仍然像純文字一大段的問題修正。
+
+### 核心原則
+
+```text
+Alt+W：複製最新 assistant rich DOM。
+Alt+N：對每一則已載入 user / assistant 訊息做同樣的 rich DOM 複製。
+```
+
+### v1.34 修正
+
+```text
+1. 如果 [data-message-author-role] 可用：
+   使用官方 user / assistant DOM。
+
+2. 如果官方 role DOM 不可用：
+   不再直接 parse main.innerText。
+   改抓 main 裡的 structured DOM blocks：
+   - p
+   - ol / ul
+   - blockquote
+   - table
+   - pre
+   - h1~h4
+
+3. 依照位置與 user bubble 特徵分成 user / assistant。
+4. 保留 assistant 的清單、粗體、段落、引用、表格、code block。
+5. raw text parser 只作最後 fallback。
+6. Alt+W / Alt+Shift+W 不改。
+```
+
+### 驗收標準
+
+```text
+Alt+N 貼到 OneNote / Word：
+- user 問句要保留
+- assistant 清單要保留縮排
+- 不應全部變成一大段文字
+- 排版要接近 Alt+W 的輸出
+```
+
+---
+
+## v1.34 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "fix: preserve structured DOM layout in Alt+N" -m "- Add structured DOM fallback for Alt+N full-session Office export.
+- Preserve paragraph, list, blockquote, table, and code block nodes when role DOM is unavailable.
+- Infer user bubbles and assistant blocks from layout instead of flattening main.innerText.
+- Keep raw text parsing only as the last fallback.
 - Keep Alt+W and Alt+Shift+W latest-answer behavior unchanged."
 ```
