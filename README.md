@@ -1,4 +1,4 @@
-# AI Prompt Bridge v1.34
+# AI Prompt Bridge v1.71
 
 AI Prompt Bridge 是一個 Tampermonkey userscript，用來在 ChatGPT、Gemini、Claude、DeepSeek、Perplexity、Qwen、Cursor 等頁面之間快速搬運內容、生成 review prompt、生成 Cursor fix prompt、整理筆記，以及複製 Word / OneNote 可用的乾淨富文本。
 
@@ -1760,4 +1760,1161 @@ git commit -m "fix: preserve structured DOM layout in Alt+N" -m "- Add structure
 - Infer user bubbles and assistant blocks from layout instead of flattening main.innerText.
 - Keep raw text parsing only as the last fallback.
 - Keep Alt+W and Alt+Shift+W latest-answer behavior unchanged."
+```
+
+---
+
+## v1.35：Alt+W 不再只複製 code block / 小片段
+
+v1.35 修正 `Alt+W` 只複製到 28 個字的問題。
+
+### 問題原因
+
+新版 ChatGPT 頁面中，最新版回答的最下方可能是 code block、短段落或 list item。舊邏輯會把這個最下方小節點當成「最新回答」，所以只複製到很短的片段。
+
+### 修正
+
+```text
+1. Alt+W selector 如果命中 pre / code / p / li / markdown fragment，
+   會先往上找到完整 assistant turn。
+
+2. 再從 assistant turn 裡選主要 markdown / prose content root。
+
+3. 若候選內容太短，會再次往上找完整回答容器。
+
+4. Alt+N 不改核心邏輯。
+```
+
+---
+
+## v1.35 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "fix: expand Alt+W from fragment to full answer" -m "- Make Alt+W climb from code blocks, paragraphs, and markdown fragments to the full assistant turn.
+- Select the main markdown or prose root from the latest assistant answer.
+- Add a safety fallback to avoid copying tiny answer fragments.
+- Keep Alt+N full-session structured DOM export behavior unchanged."
+```
+
+---
+
+## v1.36：Alt+W 改用 Alt+N 的 structured DOM 分組
+
+v1.36 修正 v1.35 仍然只複製最新回答尾端小片段的問題。
+
+### 問題原因
+
+只往上找 assistant turn 還不夠。某些 ChatGPT 專案頁面中，最新回答是由多個段落 / code block / p / ul / ol 分散組成，單一 markdown root 不一定包住全部內容。
+
+### 修正
+
+```text
+1. ChatGPT 的 Alt+W 先呼叫 Alt+N 已有的 collectStructuredDomTranscriptBlocks()。
+2. 從 structured blocks 裡取最後一個 assistant block。
+3. 直接複製該 assistant block 的 DOM 結構。
+4. 不再用最底部 pre / code / p 當最新回答。
+5. Alt+N 不改核心邏輯。
+```
+
+### 驗收
+
+```text
+Alt+W：
+- 應複製最新一則完整 assistant 回答。
+- 不應只複製 28 / 118 字。
+- code block 前後的說明文字都應保留。
+```
+
+---
+
+## v1.36 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "fix: use structured assistant block for Alt+W" -m "- Make ChatGPT Alt+W reuse the structured DOM grouping used by Alt+N.
+- Copy the latest assistant block instead of the lowest visible code block or paragraph.
+- Preserve code block context and surrounding explanation text.
+- Keep Alt+N structured DOM full-session behavior unchanged."
+```
+
+---
+
+## v1.37：Alt+W 合併最新回答的所有 assistant structured blocks
+
+v1.37 修正 `Alt+W` 仍然只複製最新回答尾端 118 字的問題。
+
+### 根因
+
+v1.36 雖然改用 structured DOM，但仍然只取「最後一個 assistant block」。  
+如果一則 ChatGPT 回答內有：
+
+```text
+段落
+code block
+段落
+code block
+最後補充段落
+```
+
+它可能被切成多個 structured blocks，導致 Alt+W 只複製最後補充段落。
+
+### 修正
+
+```text
+1. Alt+W 不再只取最後一個 assistant block。
+2. Alt+W 會找最新 user 問句之後的所有 assistant blocks。
+3. 若 user bubble 偵測失敗，則合併尾端連續 assistant blocks。
+4. collectStructuredDomTranscriptBlocks 不再用 vertical gap 切 assistant 回答。
+5. Alt+N 保持 structured DOM 行為。
+```
+
+### 驗收
+
+```text
+Alt+W：
+- 應複製最新 ChatGPT 回答整段。
+- code block 前後說明都要保留。
+- 不應只複製 118 字或最後一小段。
+```
+
+---
+
+## v1.37 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "fix: merge latest assistant blocks for Alt+W" -m "- Make Alt+W copy all assistant structured blocks after the latest user prompt.
+- Merge trailing assistant blocks when user bubble detection is unavailable.
+- Stop splitting assistant answers by vertical gap in structured DOM extraction.
+- Preserve code block context and surrounding explanation text.
+- Keep Alt+N structured DOM export behavior unchanged."
+```
+
+---
+
+## v1.38：Alt+W 只複製最新 assistant 回答，不再混入前面 session
+
+v1.38 修正 v1.37 把多個舊 assistant blocks 合併進 Alt+W 的問題。
+
+### 正確定義
+
+```text
+Alt+W：只複製最新一則 assistant 回答。
+Alt+N：複製完整已載入 session。
+```
+
+### 問題原因
+
+v1.37 為了避免只複製最後 118 字，改成「合併最新 user 之後的 assistant blocks」。  
+但在某些 ChatGPT 專案頁面，user bubble 偵測失敗時，會錯把前面多個 assistant blocks 一起合併，導致 Alt+W 變得像 Alt+N。
+
+### v1.38 修正
+
+```text
+1. Alt+W 優先使用官方 [data-message-author-role="assistant"] 的最後一則。
+2. 若官方 role 不存在，才使用最新 user bubble 的下緣作為邊界。
+3. 只抓該 user bubble 之後的 assistant 結構化 DOM。
+4. 如果連 user bubble 都抓不到，最後 fallback 只取最新一個 assistant block。
+5. Alt+N 不改，仍然是完整 session。
+```
+
+### 驗收
+
+```text
+Alt+W：
+- 只複製最新 ChatGPT 回答。
+- 不應包含上一輪回答。
+- 不應變成完整 session。
+- 不應只剩最後 118 字。
+
+Alt+N：
+- 才是完整 session。
+```
+
+---
+
+## v1.38 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "fix: keep Alt+W limited to latest answer" -m "- Keep Alt+W scoped to the latest assistant answer only.
+- Prefer the latest official assistant role node when available.
+- Use latest user bubble boundary only as a fallback for structured DOM extraction.
+- Avoid merging old trailing assistant blocks into Alt+W output.
+- Keep Alt+N as the full-session export behavior."
+```
+
+---
+
+## v1.39：Alt+W 固定用「最新 user 後方回答」作為主路徑
+
+v1.39 修正 v1.38 又退回只複製最後一小段的問題。
+
+### 根因
+
+v1.38 雖然加入 user boundary fallback，但實際執行順序仍然優先使用官方 assistant role。  
+在部分 ChatGPT Project 頁面，官方 assistant role 的 content root 會解析成最後一個 paragraph，導致 Alt+W 又只複製 121 字。
+
+### v1.39 修正
+
+```text
+1. Alt+W 主路徑改成：
+   最新 user bubble 下緣
+   ↓
+   抓它後方的 p / ol / ul / blockquote / table / pre / h1~h4
+   ↓
+   組成最新 assistant 回答
+
+2. 官方 assistant role 只當 fallback。
+3. fallback 時 clone 整個 assistant turn，不再猜內層 content root。
+4. 若有下一個 user bubble，Alt+W 會在下一個 user bubble 前停止。
+5. Alt+N 不改。
+```
+
+### 定義
+
+```text
+Alt+W：最新 user 問句之後的最新 assistant 回答。
+Alt+N：完整 session。
+```
+
+---
+
+## v1.39 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "fix: make Alt+W use latest user boundary first" -m "- Make Alt+W use the latest user bubble boundary as the primary extraction path.
+- Extract structured assistant content after the latest user prompt.
+- Stop extraction before the next user bubble when present.
+- Use official assistant role nodes only as fallback and clone the whole turn.
+- Keep Alt+N full-session behavior unchanged."
+```
+
+---
+
+## v1.40：Alt+W Strict Range Extractor
+
+v1.40 修正 Alt+W 一直退回只複製最後 121 字的問題。
+
+### 核心修正
+
+```text
+Alt+W 不再優先使用 official assistant role。
+Alt+W 主路徑固定為 strict range：
+
+最新 user prompt bubble 底部
+↓
+下一個 user bubble 或 composer 之前
+↓
+收集中間的 p / ol / ul / blockquote / table / pre / h1~h4
+↓
+組成最新 assistant 回答
+```
+
+### 為什麼這版不同
+
+前幾版一直在 assistant role / markdown root / block 合併之間切換，容易遇到 ChatGPT Project DOM 變形後只抓到最後一段。
+
+v1.40 改成直接用「最新 user 問句」當錨點，抓它後面的回答區間，所以不應再只抓到最後 121 字，也不應抓成完整 session。
+
+### 定義
+
+```text
+Alt+W：最新 user 問句後方的 assistant 回答。
+Alt+N：完整 session。
+Alt+S：完整 session 原始純文字。
+```
+
+---
+
+## v1.40 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "fix: use strict range extraction for Alt+W" -m "- Make Alt+W extract the range between the latest user prompt and the next user prompt or composer.
+- Collect structured answer nodes including paragraphs, lists, blockquotes, tables, and code blocks.
+- Avoid relying on official assistant role nodes as the primary path.
+- Keep official assistant and structured block extraction as fallbacks only.
+- Keep Alt+N full-session behavior unchanged."
+```
+
+---
+
+## v1.41：Alt+W Toolbar Anchor Extractor
+
+v1.41 修正 ChatGPT Project 頁面中 Alt+W 一直只複製最後 91/121 字的問題。
+
+### 核心改法
+
+```text
+Alt+W 主路徑改成：
+
+最新 assistant 回答底下那排 toolbar icon
+(copy / share / read aloud / regenerate / thumbs / more)
+作為底部錨點
+
+然後往上找最新 user bubble 作為頂部錨點
+
+只複製兩者中間的 p / ol / ul / blockquote / table / pre / h1~h4。
+```
+
+這代表 Alt+W 不再猜：
+
+```text
+最後一個 assistant role
+最後一個 markdown root
+最後一個 paragraph
+```
+
+而是直接用 ChatGPT 畫面結構：  
+**最新 user 問句 → 最新回答 toolbar** 之間的內容。
+
+### 定義
+
+```text
+Alt+W：最新回答，不是完整 session。
+Alt+N：完整 session。
+Alt+S：完整 session 原始純文字。
+```
+
+---
+
+## v1.41 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "fix: use assistant toolbar anchor for Alt+W" -m "- Make Alt+W use the latest assistant toolbar as the bottom anchor.
+- Use the latest user bubble before that toolbar as the top anchor.
+- Copy only structured answer DOM between those two anchors.
+- Avoid guessing assistant role or markdown roots as the primary path.
+- Keep Alt+N full-session behavior unchanged."
+```
+
+---
+
+## v1.42：Alt+W Clone Latest Answer Container
+
+v1.42 修正 Alt+W 只抓到頭尾句、或只抓最後 91/121 字的問題。
+
+### 核心定義
+
+```text
+Alt+W：複製最新 assistant 回答整段。
+Alt+N：複製完整 session。
+Alt+S：複製完整 session 原始純文字。
+```
+
+### v1.42 修正方式
+
+```text
+1. 找最新 assistant 回答底下的 toolbar。
+2. 從 toolbar 往上找「真正包含整個回答的容器」。
+3. clone 該容器。
+4. 移除 toolbar / button / svg / composer 雜訊。
+5. 保留 paragraph、list、blockquote、table、code block。
+6. 只有 container clone 失敗時，才退回 v1.41 range extractor。
+```
+
+這版不再只用 p/ol/ul 節點拼接，也不再只取最後 paragraph。
+
+---
+
+## v1.42 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "fix: clone latest answer container for Alt+W" -m "- Make Alt+W clone the latest assistant answer container anchored by its toolbar.
+- Preserve the whole latest answer instead of only first or last paragraphs.
+- Remove toolbar buttons, icons, and composer noise from the cloned answer.
+- Keep structured range extraction as fallback only.
+- Keep Alt+N full-session behavior unchanged."
+```
+
+---
+
+## v1.43：修正 Alt+W code block / 純文字區塊貼到 OneNote 變成一行
+
+v1.43 修正最新回答整段已抓對，但貼到 OneNote / Word 後，ChatGPT 的「純文字 / code block」區塊被壓成同一行的問題。
+
+### 問題原因
+
+部分 ChatGPT Project 頁面的「純文字」灰框不是標準 `<pre><code>`，而是由多個 `div/span` 加 CSS 顯示成 code block。  
+複製到 OneNote 時，CSS 顯示換行會遺失，所以變成：
+
+```text
+Contributor A 已訂閱 Creator X ↓ Contributor A ...
+```
+
+### v1.43 修正
+
+```text
+1. cleanRichClone() 時先偵測 ChatGPT rendered code block。
+2. 將「純文字 / plaintext / code-like 灰框」轉成真正的 <pre><code>。
+3. 保留 code block 內的換行、箭頭、縮排。
+4. OneNote / Word 匯出時，pre/code 強制 white-space: pre-wrap。
+5. 不影響 Alt+N / Alt+S / Cursor / Review 功能。
+```
+
+---
+
+## v1.43 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "fix: preserve code block formatting in Alt+W exports" -m "- Convert ChatGPT rendered plaintext/code blocks into real pre/code blocks before cleanup.
+- Preserve line breaks, arrows, and indentation when pasting to OneNote or Word.
+- Prevent OneNote body styling from flattening code block spans.
+- Keep Alt+W latest-answer container clone behavior unchanged.
+- Keep Alt+N full-session behavior unchanged."
+```
+
+---
+
+## v1.44：Alt+W 最新回答 Range Clone + code block 換行修正
+
+v1.44 修正兩個問題：
+
+```text
+1. 第一次 Alt+W 可能抓到過多舊對話。
+2. 第二次 Alt+W 範圍正確，但 code block / 純文字灰框貼到 OneNote 後變成一行。
+```
+
+### v1.44 修正方式
+
+```text
+1. Alt+W 主路徑改成真正 DOM Range clone：
+   最新 user prompt / 前一個 assistant toolbar
+   ↓
+   最新 assistant toolbar
+
+2. 不再優先 clone 大 container，避免抓到整個 session。
+
+3. 在 cleanup 前先把 ChatGPT rendered code block 轉成真正 <pre><code>。
+
+4. 若 code block 被扁平成一行，會把 ↓ / → 重新拆成換行。
+
+5. Alt+N / Alt+S / Cursor / Review 功能不改。
+```
+
+---
+
+## v1.44 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "fix: stabilize Alt+W range copy and code formatting" -m "- Make Alt+W clone a DOM range from the latest user prompt or previous toolbar to the latest assistant toolbar.
+- Avoid cloning oversized answer containers that can include older session content.
+- Convert rendered ChatGPT plaintext/code blocks into real pre/code blocks before cleanup.
+- Preserve arrow-based line breaks in copied code blocks for OneNote and Word.
+- Keep Alt+N full-session behavior unchanged."
+```
+
+---
+
+## v1.45：修正 Alt+W F5 後抓到舊 session + code block 換行仍被壓扁
+
+v1.45 修正兩個 v1.44 仍存在的問題：
+
+```text
+1. F5 後第一次 Alt+W 可能抓到 7782 字，混入舊 session。
+2. 範圍正確後，ChatGPT 的「純文字 / code block」灰框貼到 OneNote 仍被壓成一行。
+```
+
+### 根因
+
+```text
+1. F5 後 ChatGPT Project 頁面的 user bubble 可能還沒完全穩定。
+   v1.44 會退回用「前一個 assistant toolbar」當起點，
+   這可能把前面舊回答一起 clone 進來。
+
+2. ChatGPT 的灰色「純文字」區塊常不是標準 <pre><code>，
+   而是 div/span + CSS 偽裝成 code block。
+   Detached clone 上 innerText / CSS 換行不穩，貼到 OneNote 會被壓成一行。
+```
+
+### v1.45 修正
+
+```text
+1. Alt+W range clone 必須找到最新 user bubble。
+   找不到時不再用前一個 assistant toolbar 當 fallback 起點，避免抓到舊 session。
+
+2. Alt+W 加上 12000 字 guardrail。
+   超過就視為可能抓到 full session，拒絕該路徑。
+
+3. code block 轉換時不再依賴 isConnected / CSS innerText。
+   改用 DOM 子節點 walk，依 div / p / li / br / pre / code 重建換行。
+
+4. 再把 fake code block 轉成真正 <pre><code>，
+   保留 ↓ / → / 縮排 / 換行。
+```
+
+---
+
+## v1.45 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "fix: prevent Alt+W session leakage and preserve code lines" -m "- Require the latest user bubble for Alt+W range cloning instead of falling back to the previous toolbar.
+- Add a smaller guardrail to reject oversized Alt+W ranges that look like full-session captures.
+- Rebuild rendered code block text from DOM child nodes instead of relying on detached innerText.
+- Convert fake ChatGPT plaintext blocks into real pre/code blocks while preserving arrows and line breaks.
+- Keep Alt+N full-session behavior unchanged."
+```
+
+---
+
+## v1.46：Alt+W 移除 user prompt 與 ChatGPT UI 贅字
+
+v1.46 修正 Alt+W 已能抓到最新回答，但匯出內容仍混入不需要文字的問題。
+
+### 修正問題
+
+```text
+1. Alt+W 內容開頭可能混入最新 user prompt：
+   coomer 是怎讀取非訂閱內容
+
+2. Alt+W 可能混入 ChatGPT UI 贅字：
+   檢視版本
+   新增至專案來源
+   回應
+   回應欠佳
+   另外
+   ChatGPT 可能會出錯。請查證重要資訊。
+```
+
+### v1.46 修正
+
+```text
+1. 新增 removeLeadingUserPromptFromAltW()
+   Alt+W 匯出前移除開頭的 user bubble / prompt label。
+
+2. 新增 removeExportNoiseNodes()
+   清除 ChatGPT UI chrome / feedback / project-source buttons。
+
+3. code block 文字 normalizer 也同步排除 UI label。
+
+4. Alt+N / Alt+S / Cursor / Review 不改。
+```
+
+### 定義
+
+```text
+Alt+W：最新 assistant 回答整段，且不包含 user prompt / UI 贅字。
+Alt+N：完整 session。
+Alt+S：完整 session 原始純文字。
+```
+
+---
+
+## v1.46 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "fix: remove UI noise from Alt+W exports" -m "- Remove accidental leading user prompt text from Alt+W latest-answer exports.
+- Strip ChatGPT UI noise such as project-source, response, bad-response, version, and footer labels.
+- Apply noise cleanup before Office rich-text formatting.
+- Keep code block line preservation from v1.45.
+- Keep Alt+N full-session behavior unchanged."
+```
+
+---
+
+## v1.47：Alt+W 改用目前畫面最新可見 assistant toolbar
+
+v1.47 修正 v1.46 仍可能抓到舊 session 的問題。
+
+### 問題
+
+F5 或 ChatGPT Project 頁面重排後，DOM 裡可能同時存在舊對話、隱藏節點、virtualized content。  
+前幾版用 DOM 順序找 latest toolbar，可能選到不是目前畫面上正在看的回答，導致 Alt+W 貼出舊內容，例如：
+
+```text
+今天 上午1:53
+下一版我已經先做成 v5.2 Stable UI...
+```
+
+### v1.47 修正
+
+```text
+1. Alt+W 主路徑改成只找「目前 viewport 可見」的 assistant toolbar。
+2. 選目前畫面中最靠近 composer 的可見 toolbar。
+3. 再找該 toolbar 上方最近的可見 user bubble。
+4. 只 clone 兩者中間的 DOM Range。
+5. 若內容仍含舊 session 特徵，直接拒絕該路徑。
+6. Alt+N / Alt+S / Cursor / Review 不改。
+```
+
+### 定義
+
+```text
+Alt+W：目前畫面最新可見 assistant 回答整段。
+Alt+N：完整 session。
+Alt+S：完整 session 原始純文字。
+```
+
+---
+
+## v1.47 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "fix: anchor Alt+W to visible latest answer" -m "- Make Alt+W choose the latest visible assistant toolbar in the current viewport.
+- Use the nearest visible user bubble above that toolbar as the range start.
+- Clone only the visible latest answer range to avoid hidden or old session content after refresh.
+- Reject ranges that still contain known stale-session markers.
+- Keep Alt+N full-session behavior unchanged."
+```
+
+---
+
+## v1.53：回到 v1.47 基準，只做 Alt+W 防呆修正
+
+v1.53 是 rollback-safe 版本。  
+它不沿用 v1.51 / v1.52 的「visible user prompt → composer」路徑，因為該路徑會把 composer 草稿或舊 session 誤當成最新回答，導致 Alt+W 複製 6987 字。
+
+### 修正原則
+
+```text
+1. 以 v1.47 為基準。
+2. 移除 v1.51 / v1.52 的 first-load user-to-composer path。
+3. 不改 Alt+N。
+4. 不改 Alt+S。
+5. 不改 Alt+V / Cursor / Review / Panel / Project Context。
+6. Alt+W 若偵測到舊 session / composer 草稿，直接停止複製，不覆蓋剪貼簿。
+```
+
+### v1.53 修正
+
+```text
+1. 停用 Alt+W 的 broad container clone fallback。
+   這個 fallback 在 ChatGPT Project 頁面可能抓到整個 session。
+
+2. 新增 isBadAltWExportText()：
+   若 Alt+W 候選內容含以下舊 session / composer 草稿標記，直接停止：
+   - 下一版我已經先做成 v5.2 Stable UI
+   - 下一版 2.coomer.su 無法使用
+   - 2.coomer.su 無法使用
+   - 處理時間為 11s
+   - 今天 上午1:53
+   - 新增至專案來源
+   - 回應欠佳
+
+3. Alt+W 超過 12000 字也停止，避免誤複製 full session。
+```
+
+### 定義
+
+```text
+Alt+W：最新 assistant 回答整段。
+Alt+N：完整 session。
+Alt+S：完整 session 原始純文字。
+```
+
+---
+
+## v1.53 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "fix: rollback Alt+W to v1.47 baseline with stale-session guard" -m "- Base Alt+W behavior on v1.47 instead of the broken v1.51/v1.52 user-to-composer path.
+- Disable broad container clone fallback that can capture full sessions after refresh.
+- Add stale-session and composer-draft guardrails before writing to clipboard.
+- Prevent Alt+W from overwriting the clipboard when candidate text looks like an old session.
+- Keep Alt+N, Alt+S, Cursor, Review, Panel, and Project Context unchanged."
+```
+
+---
+
+## v1.54：恢復 v1.47 的完整回答 fallback，但加嚴格防呆
+
+v1.53 過度保守，停用了 toolbar container fallback，導致 Alt+W 又退回只抓目前可見片段，變成約 465 字。
+
+### v1.54 修正
+
+```text
+1. 保留 v1.47 / v1.53 主流程。
+2. 恢復 v1.47 的 toolbar container fallback。
+3. 但改成 guarded fallback：
+   - 含 composer / input / textarea / contenteditable：拒絕
+   - 含 user role：拒絕
+   - 含多個 assistant toolbar：拒絕
+   - 含舊 session / composer draft 標記：拒絕
+   - 超過 12000 字：拒絕
+4. 目標是恢復正確的 13xx 字完整最新回答，且保留 code block / 純文字灰框排版。
+5. 不改 Alt+N / Alt+S / Alt+V / Cursor / Review / Panel / Project Context。
+```
+
+### 定義
+
+```text
+Alt+W：最新 assistant 回答整段，正常應包含 code block / 純文字灰框。
+Alt+N：完整 session。
+Alt+S：完整 session 原始純文字。
+```
+
+---
+
+## v1.54 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "fix: restore guarded Alt+W full-answer fallback" -m "- Restore the v1.47-style toolbar container fallback for Alt+W.
+- Guard the fallback against composer drafts, user turns, multiple toolbars, stale sessions, and full-session captures.
+- Fix the 465-character partial answer regression from v1.53.
+- Preserve code block and plaintext block formatting for OneNote and Word.
+- Keep Alt+N, Alt+S, Cursor, Review, Panel, and Project Context unchanged."
+```
+
+---
+
+## v1.55：修正 Alt+W 又退回 465 字片段
+
+v1.55 以 v1.54 為基準，只修 Alt+W 的執行順序。
+
+### 問題
+
+v1.54 已恢復 guarded toolbar container fallback，但順序仍是：
+
+```text
+range clone
+↓
+guarded full container
+```
+
+所以 range clone 先成功時，就會直接回傳目前畫面可見片段，造成：
+
+```text
+Alt+W = 465 字
+```
+
+而不會進到後面的 guarded full container。
+
+### v1.55 修正
+
+```text
+1. Alt+W 第一順位改成 guarded full-answer container。
+2. guarded container 會保留完整回答與 code/plaintext block，目標恢復正確 13xx 字。
+3. range clone 只當 fallback。
+4. 若候選內容符合已知 465 字片段特徵，直接拒絕。
+5. 若候選內容符合 6xxx 舊 session / composer 草稿特徵，直接拒絕。
+6. 不改 Alt+N / Alt+S / Alt+V / Cursor / Review / Panel / Project Context。
+```
+
+### 定義
+
+```text
+Alt+W：最新 assistant 回答整段，正常應包含 code block / 純文字灰框。
+Alt+N：完整 session。
+Alt+S：完整 session 原始純文字。
+```
+
+---
+
+## v1.55 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "fix: prioritize guarded full answer for Alt+W" -m "- Make Alt+W try the guarded full-answer container before range-clone fallback.
+- Prevent the 465-character partial fragment from being accepted as a valid latest answer.
+- Keep stale-session and composer-draft guardrails to avoid 6xxx full-session captures.
+- Preserve code/plaintext block formatting for OneNote and Word.
+- Keep Alt+N, Alt+S, Cursor, Review, Panel, and Project Context unchanged."
+```
+
+---
+
+## v1.56：依 DOM log 鎖定正確 MarkdownRoot 回答節點
+
+v1.56 是根據實際 DevTools DOM debug log 修正，不再猜 toolbar / range。
+
+### DOM log 結論
+
+實際頁面裡同時存在三種候選：
+
+```text
+1. 6xxx 字：外層 transcript / workspace container，會抓到整個 session。
+2. 465 字：目前畫面底部可見片段，會漏掉中間 code block。
+3. 1257 / 13xx 字：正確的單一 assistant MarkdownRoot 回答節點。
+```
+
+正確節點特徵：
+
+```text
+class 包含 MarkdownRoot
+visible = true
+chars 約 1257
+preview 從「Coomer 能讓...」開始
+內部包含 p / code / pre / list 等回答內容
+不含 user role / composer / toolbar
+```
+
+### v1.56 修正
+
+```text
+1. Alt+W 第一順位改成搜尋 visible MarkdownRoot / markdown / prose answer root。
+2. 只接受部分可見的單一 assistant 回答 root。
+3. 排除：
+   - user role
+   - composer / input / textarea / contenteditable
+   - assistant toolbar
+   - full transcript container
+   - 舊 session / composer draft marker
+   - 465 字片段
+   - 6xxx session
+4. 保留 code block / plaintext block / list / paragraph 格式。
+5. Alt+N / Alt+S / Alt+V / Cursor / Review / Panel / Project Context 不改。
+```
+
+### 定義
+
+```text
+Alt+W：複製目前最新 assistant MarkdownRoot 回答整段，正常應是約 13xx 字且排版正確。
+Alt+N：完整 session。
+Alt+S：完整 session 原始純文字。
+```
+
+---
+
+## v1.56 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "fix: select visible MarkdownRoot for Alt+W" -m "- Add a DOM-log based Alt+W extractor that prioritizes the visible MarkdownRoot assistant answer.
+- Avoid full transcript containers that produce 6xxx-character copies.
+- Avoid visible range fragments that produce 465-character partial copies.
+- Preserve code/plaintext block, list, and paragraph formatting for OneNote and Word.
+- Keep Alt+N, Alt+S, Cursor, Review, Panel, and Project Context unchanged."
+```
+
+---
+
+## v1.57：修正 Alt+W v1.56 貼到 OneNote / Word 字體變小
+
+v1.56 已經正確鎖定 visible MarkdownRoot，能避免 465 字片段與 6xxx session 問題。  
+但 MarkdownRoot 內部保留了 ChatGPT 的 `CodeContent` / `text-size-code` / `MarkdownRoot` 樣式，貼到 OneNote / Word 時會把部分內容變成小字。
+
+### v1.57 修正
+
+```text
+1. Alt+W 的 MarkdownRoot export 會強制套用 Office-friendly inline style。
+2. 一般文字固定 20pt。
+3. code / pre 也固定 20pt，但保留 monospace 與灰底區塊。
+4. 標題保留較大字體：
+   - H1: 24pt
+   - H2/H3/H4: 22pt
+5. 保留 paragraph / list / code block 排版。
+6. 不改 Alt+N / Alt+S / Alt+V / Cursor / Review / Panel / Project Context。
+```
+
+### 定義
+
+```text
+Alt+W：最新 assistant MarkdownRoot 回答整段，貼到 OneNote / Word 時內文 20pt。
+Alt+N：完整 session。
+Alt+S：完整 session 原始純文字。
+```
+
+---
+
+## v1.57 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "fix: normalize Alt+W MarkdownRoot font size for Office" -m "- Keep the v1.56 visible MarkdownRoot extractor.
+- Force Office-friendly inline font styles for MarkdownRoot Alt+W exports.
+- Keep normal text and code/pre blocks at 20pt when pasted into OneNote or Word.
+- Preserve monospace code blocks, gray code backgrounds, lists, paragraphs, and headings.
+- Keep Alt+N, Alt+S, Cursor, Review, Panel, and Project Context unchanged."
+```
+
+---
+
+## v1.58：修正 Alt+W code / 純文字區塊仍貼成小字
+
+v1.57 已修正 MarkdownRoot 抓取正確，但舊的 Office export 樣式仍殘留 `pre/code = 16pt` 的規則。  
+因此 OneNote / Word 貼上後，灰底 code / 純文字區塊仍會變小。
+
+### v1.58 修正
+
+```text
+1. 移除 Alt+W Office export 裡所有 16pt。
+2. pre / code / pre* / code* 全部強制 20pt。
+3. normalizeRichHtml 的 font-size 改成 20pt !important。
+4. MarkdownRoot export 最後再跑一層 universal 20pt inline pass。
+5. 保留 monospace、灰底、邊框、換行。
+6. 不改 Alt+W 抓取邏輯。
+7. 不改 Alt+N / Alt+S / Alt+V / Cursor / Review / Panel / Project Context。
+```
+
+### 定義
+
+```text
+Alt+W：最新 assistant MarkdownRoot 回答整段；一般文字與 code/plaintext block 都是 20pt。
+Alt+N：完整 session。
+Alt+S：完整 session 原始純文字。
+```
+
+---
+
+## v1.58 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "fix: force Alt+W code blocks to 20pt" -m "- Keep the v1.56/v1.57 visible MarkdownRoot extractor unchanged.
+- Remove remaining 16pt styling from pre and code Office exports.
+- Force pre, code, and their descendants to 20pt for OneNote and Word.
+- Add a final MarkdownRoot 20pt inline-style pass before clipboard export.
+- Keep Alt+N, Alt+S, Cursor, Review, Panel, and Project Context unchanged."
+```
+
+---
+
+## v1.59：修正 Alt+W 貼到 OneNote / Word 全文像被反白
+
+v1.58 修正了 20pt，但 MarkdownRoot / CodeContent 的背景樣式仍可能被 OneNote / Word 帶入，造成一般段落貼上後像整段被灰色反白。
+
+### v1.59 修正
+
+```text
+1. 不改 Alt+W 抓取邏輯。
+2. 一般 paragraph / span / div / list 背景強制 transparent。
+3. inline code 背景改 transparent，避免整段看起來反白。
+4. 只有真正的 pre code block 保留灰底、邊框、monospace。
+5. 全部文字仍維持 20pt。
+6. 不改 Alt+N / Alt+S / Alt+V / Cursor / Review / Panel / Project Context。
+```
+
+### 定義
+
+```text
+Alt+W：最新 assistant MarkdownRoot 回答整段；格式接近 ChatGPT，正常段落不反白，code block 保留灰底。
+Alt+N：完整 session。
+Alt+S：完整 session 原始純文字。
+```
+
+---
+
+## v1.59 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "fix: remove Alt+W gray highlight leakage" -m "- Keep the v1.56 visible MarkdownRoot extractor unchanged.
+- Keep Alt+W text and code blocks at 20pt.
+- Remove inherited gray backgrounds from normal paragraphs, spans, divs, and inline code.
+- Preserve gray background only for real pre/code blocks.
+- Keep Alt+N, Alt+S, Cursor, Review, Panel, and Project Context unchanged."
+```
+
+---
+
+## v1.60：修正 Alt+W code block 內部 span 背景造成整段反白
+
+v1.59 已移除一般段落背景，但 ChatGPT 的 code block 內部仍可能有 syntax-highlight span / CodeContent 背景。  
+OneNote / Word 會把這些 span 背景保留下來，造成貼上後看起來像每行、每段都被反白。
+
+### v1.60 修正
+
+```text
+1. 不改 Alt+W 抓取邏輯。
+2. 複製前把 pre/code block 重新建成乾淨結構：
+   pre
+   └── code 純文字
+3. 移除 code block 內所有 syntax-highlight span 背景。
+4. 只有 pre 外框保留單一灰底與邊框。
+5. inline code 背景仍為 transparent。
+6. 全部文字維持 20pt。
+7. 不改 Alt+N / Alt+S / Alt+V / Cursor / Review / Panel / Project Context。
+```
+
+### 定義
+
+```text
+Alt+W：最新 assistant MarkdownRoot 回答整段；正常段落不反白，code block 是單一灰底區塊。
+Alt+N：完整 session。
+Alt+S：完整 session 原始純文字。
+```
+
+---
+
+## v1.60 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "fix: rebuild Alt+W code blocks for Office" -m "- Keep the v1.56 visible MarkdownRoot extractor unchanged.
+- Rebuild pre/code blocks into clean plain code nodes before clipboard export.
+- Remove syntax-highlight span backgrounds that caused gray highlight leakage in OneNote and Word.
+- Preserve a single gray background only on the outer pre block.
+- Keep all Alt+W exported text at 20pt and leave Alt+N, Alt+S, Cursor, Review, Panel, and Project Context unchanged."
+```
+
+---
+
+## v1.61：重建 Alt+W Office HTML，徹底移除反白與 ChatGPT class
+
+v1.60 只重建 pre/code，但 OneNote / Word 仍可能從 ChatGPT 的 MarkdownRoot、CodeContent、span、mark、class 或背景樣式繼承 highlight。  
+v1.61 改成在 Alt+W 複製前，為 Office 重新建立一份乾淨 HTML，不再直接貼原始 ChatGPT DOM。
+
+### v1.61 修正
+
+```text
+1. 不改 Alt+W 抓取節點邏輯。
+2. Alt+W MarkdownRoot 取得後，重新產生 Office-only HTML。
+3. 移除所有 ChatGPT class / bgcolor / span / mark 背景。
+4. 一般段落用乾淨 p/div/list，不保留 highlight。
+5. code block 重新建成：
+   pre
+   └── code 純文字
+6. 只有 pre 外層保留單一灰底與邊框。
+7. 全部文字 20pt。
+8. 不改 Alt+N / Alt+S / Alt+V / Cursor / Review / Panel / Project Context。
+```
+
+### 定義
+
+```text
+Alt+W：最新 assistant MarkdownRoot 回答整段；貼到 OneNote / Word 時接近 ChatGPT 排版，但無整段反白。
+Alt+N：完整 session。
+Alt+S：完整 session 原始純文字。
+```
+
+---
+
+## v1.61 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "fix: rebuild clean Office HTML for Alt+W" -m "- Keep the v1.56 visible MarkdownRoot extractor unchanged.
+- Rebuild Alt+W MarkdownRoot content into a clean Office-only HTML tree.
+- Remove ChatGPT classes, spans, marks, bgcolor, and inherited highlight backgrounds.
+- Preserve paragraphs, lists, blockquotes, and single gray pre/code blocks at 20pt.
+- Keep Alt+N, Alt+S, Cursor, Review, Panel, and Project Context unchanged."
+```
+
+---
+
+## v1.63：基於 v1.61 修正 Alt+W 反白，不使用 v1.62 Safe Mode
+
+v1.62 會把格式壓平成整段，所以不採用。  
+v1.63 回到 v1.61 的抓取與結構保留策略，只針對 OneNote / Word 的反白問題修正。
+
+### v1.63 修正
+
+```text
+1. 基於 v1.61，不採用 v1.62 Safe Mode。
+2. Alt+W 抓取邏輯不改，仍使用 visible MarkdownRoot。
+3. 移除 ChatGPT span / mark / class / bgcolor，避免 Office 變成逐字反白。
+4. code block 不再輸出 pre/code。
+5. code block 改成 Office 友善的一欄表格：
+   table
+   └── tr
+       └── td
+6. 只有 td 保留單一灰底，不保留每行 / 每字背景。
+7. 一般段落、粗體、清單、blockquote、表格結構保留。
+8. 全部文字維持 20pt。
+9. 不改 Alt+N / Alt+S / Alt+V / Cursor / Review / Panel / Project Context。
+```
+
+### 定義
+
+```text
+Alt+W：最新 assistant MarkdownRoot 回答整段；保留段落與 code block 可讀性，不再逐字反白。
+Alt+N：完整 session。
+Alt+S：完整 session 原始純文字。
+```
+
+---
+
+## v1.63 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "fix: preserve Alt+W layout while removing highlight leakage" -m "- Base the fix on v1.61 and do not use the v1.62 Safe Mode flattening path.
+- Keep the visible MarkdownRoot Alt+W extractor unchanged.
+- Rebuild code blocks as one-cell Office tables instead of pre/code nodes.
+- Remove ChatGPT span, mark, class, bgcolor, and inherited backgrounds from normal text.
+- Preserve paragraphs, lists, blockquotes, bold text, and readable code blocks at 20pt.
+- Keep Alt+N, Alt+S, Cursor, Review, Panel, and Project Context unchanged."
+```
+
+---
+
+## v1.67：基於 v1.63，code block 改成每行一列 table row
+
+v1.64：一個 table cell 放全部 code，Word / OneNote 會壓成一段。  
+v1.65：每行 div，Office 仍可能壓成 inline。  
+v1.66：每行 p，Office 仍可能壓成 inline。  
+
+v1.67 回到 v1.63，保留反白修正，但 code block 改成「每一行一個 table row」。
+
+### v1.67 修正
+
+```text
+1. 基於 v1.63。
+2. 不採用 v1.64 one-cell table。
+3. 不採用 v1.65 div line。
+4. 不採用 v1.66 p line。
+5. Alt+W 抓取邏輯不改，仍使用 visible MarkdownRoot。
+6. code block 不輸出 pre/code。
+7. code block 改成：
+   table[data-codeblock]
+   ├── tr 第 1 行 → td
+   ├── tr 第 2 行 → td
+   └── tr 第 N 行 → td
+8. 每行空白轉成 NBSP，避免 Word / OneNote 壓縮縮排。
+9. 用 table row 強制 Office 保留換行。
+10. 保留 v1.63 的反白修正。
+11. 不改 Alt+N / Alt+S / Alt+V / Cursor / Review / Panel / Project Context。
+```
+
+---
+
+## v1.67 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "fix: preserve Alt+W code block rows for Office" -m "- Base the fix on v1.63 and avoid the v1.64 one-cell table path.
+- Avoid the v1.65 div-line and v1.66 p-line paths.
+- Keep the visible MarkdownRoot Alt+W extractor unchanged.
+- Render code blocks as Office-safe tables with one row per original line.
+- Convert spaces inside code-block lines to NBSP so Word and OneNote preserve flowchart indentation.
+- Preserve the v1.63 highlight-leakage fix and keep Alt+N, Alt+S, Cursor, Review, Panel, and Project Context unchanged."
+```
+
+---
+
+## v1.71：基於 v1.67，只隱藏 Word / OneNote 的 code block 表格線
+
+v1.67 的架構是正確的：每一行一個 table row，能保留 code block 的換行。  
+v1.70 則會把 code block 內容壓成一行，所以不採用。
+
+v1.71 回到 v1.67，只加強 Office 專用隱藏格線設定。
+
+### v1.71 修正
+
+```text
+1. 基於 v1.67。
+2. 不採用 v1.70。
+3. Alt+W 抓取邏輯不改。
+4. code block 仍維持一行一列，保留換行。
+5. 加上 border=0 / frame=void / rules=none。
+6. 加上 border-color:transparent。
+7. 加上 mso-border-alt:none。
+8. 加上 mso-table-lspace/rspace:0pt。
+9. 不改 Alt+N / Alt+S / Alt+V / Cursor / Review / Panel / Project Context。
+```
+
+---
+
+## v1.71 Git Commit
+
+```bash
+git add README.md ai-prompt-bridge.user.js ai-prompt-bridge.user.txt
+git commit -m "fix: hide Office grid lines in Alt+W code blocks" -m "- Base the fix on v1.67 because its one-row-per-line code block structure is correct.
+- Avoid the v1.70 single-cell path because it collapses code block line breaks.
+- Keep the visible MarkdownRoot Alt+W extractor unchanged.
+- Add border=0, frame=void, rules=none, transparent border color, and mso-border-alt:none to code-block tables and cells.
+- Preserve line breaks, arrows, indentation, and the v1.63 highlight-leakage fix.
+- Keep Alt+N, Alt+S, Cursor, Review, Panel, and Project Context unchanged."
 ```

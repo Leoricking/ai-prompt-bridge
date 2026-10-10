@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         AI Prompt Bridge
 // @namespace    https://ai-prompt-bridge.local/ai-prompt-bridge
-// @version      1.34.0
-// @description  Cross-AI prompt bridge for ChatGPT, Gemini, Claude, DeepSeek, Qwen, Perplexity and Cursor workflows. Fixes Alt+N layout fallback by reconstructing full sessions from structured DOM blocks instead of flattened innerText.
+// @version      1.71.0
+// @description  Cross-AI prompt bridge for ChatGPT, Gemini, Claude, DeepSeek, Qwen, Perplexity and Cursor workflows. Rollback-safe Alt+W fix based on v1.71; removes broken first-load user-to-composer path and adds stale-session guardrails.
 // @author       Rossi
 // @match        https://chatgpt.com/*
 // @match        https://chat.openai.com/*
@@ -30,7 +30,7 @@
 (function () {
     "use strict";
 
-    const AI_PROMPT_BRIDGE_VERSION = "1.34.0";
+    const AI_PROMPT_BRIDGE_VERSION = "1.71.0";
     console.log("[AI Prompt Bridge] injected", AI_PROMPT_BRIDGE_VERSION, location.href);
 
     function showStartupProbe() {
@@ -66,13 +66,13 @@
         }
     }
 
-    const STORAGE_KEY = "ai_prompt_bridge_payload_v134";
-    const PANEL_POS_KEY = "ai_prompt_bridge_panel_position_v134";
-    const PANEL_ID = "ai-prompt-bridge-panel-v134";
-    const BUBBLE_ID = "ai-prompt-bridge-restore-bubble-v134";
-    const COLLAPSED_KEY = "ai_prompt_bridge_collapsed_v134";
-    const HIDDEN_KEY = "ai_prompt_bridge_hidden_v134";
-    const PROJECT_KEY = "ai_prompt_bridge_project_key_v134";
+    const STORAGE_KEY = "ai_prompt_bridge_payload_v171";
+    const PANEL_POS_KEY = "ai_prompt_bridge_panel_position_v171";
+    const PANEL_ID = "ai-prompt-bridge-panel-v171";
+    const BUBBLE_ID = "ai-prompt-bridge-restore-bubble-v171";
+    const COLLAPSED_KEY = "ai_prompt_bridge_collapsed_v171";
+    const HIDDEN_KEY = "ai_prompt_bridge_hidden_v171";
+    const PROJECT_KEY = "ai_prompt_bridge_project_key_v171";
 
     const PROJECTS = {
         auto: {
@@ -936,6 +936,53 @@
         return rect.bottom > 0 && rect.top < window.innerHeight;
     }
 
+    function isPartialAltWFragmentText(text) {
+        const t = cleanExportMultiline(text || "");
+        if (!t) return true;
+
+        // Known failure mode: range fallback grabs only the visible bottom fragment (~465 chars)
+        // and misses the code/plaintext block in the middle of the answer.
+        if (
+            t.length >= 250 &&
+            t.length <= 800 &&
+            /Coomer 能讓「沒有訂閱的人看到內容」/.test(t) &&
+            /另外通常還會有幾層/.test(t) &&
+            !/Contributor\s*A/.test(t) &&
+            !/Importer/.test(t)
+        ) {
+            return true;
+        }
+
+        return false;
+    }
+
+    function isBadAltWExportText(text) {
+        const t = cleanExportMultiline(text || "");
+        if (!t) return true;
+        if (isPartialAltWFragmentText(t)) return true;
+
+        // These are known stale composer / old-session leak markers from the broken v1.51/v1.52 path.
+        const staleMarkers = [
+            "下一版我已經先做成 v5.2 Stable UI",
+            "下一版 2.coomer.su 無法使用",
+            "2.coomer.su 無法使用",
+            "處理時間為 11s",
+            "今天 上午1:53",
+            "新增至專案來源",
+            "回應欠佳",
+            "1.下一版 2.coomer.su 無法使用",
+            "下一版 2.coomer.su 無法使用",
+            "2.coomer.su 無法使用,找類似網站"
+        ];
+
+        if (staleMarkers.some((marker) => t.includes(marker))) return true;
+
+        // Alt+W is single answer. Do not allow likely full-session exports.
+        if (t.length > 12000) return true;
+
+        return false;
+    }
+
     function isLikelyWholeSessionElement(element) {
         if (!element || !element.querySelectorAll) return true;
 
@@ -1320,6 +1367,74 @@
         return visibleHeight / Math.max(1, rect.height);
     }
 
+    function findAssistantTurnContainerFromChild(element) {
+        if (!element || !element.closest) return null;
+
+        const roleContainer = element.closest('[data-message-author-role="assistant"]');
+        if (roleContainer) return roleContainer;
+
+        const candidates = [
+            element.closest("article"),
+            element.closest('[data-testid*="conversation-turn"]'),
+            element.closest('[data-testid*="assistant"]'),
+            element.closest('[class*="group\\/conversation-turn"]'),
+            element.closest('[class*="conversation-turn"]')
+        ].filter(Boolean);
+
+        for (const candidate of candidates) {
+            const text = cleanExportMultiline(candidate.innerText || candidate.textContent || "");
+            if (!text || text.length < 20) continue;
+            if (candidate.querySelector?.("textarea,input,[contenteditable='true']")) continue;
+            if (candidate.closest?.(`#${PANEL_ID},#${BUBBLE_ID},#ai-prompt-bridge-startup-probe`)) continue;
+            return candidate;
+        }
+
+        return null;
+    }
+
+    function getBestAssistantContentRoot(turnContainer) {
+        if (!turnContainer) return null;
+
+        const roots = [];
+        const selectors = [
+            ".markdown",
+            ".prose",
+            "[class*='markdown']",
+            "[class*='prose']",
+            "[data-message-author-role='assistant']"
+        ];
+
+        selectors.forEach((selector) => {
+            try {
+                turnContainer.querySelectorAll(selector).forEach((node) => {
+                    const text = cleanExportMultiline(node.innerText || node.textContent || "");
+                    const hasRich = Boolean(node.querySelector?.("p,li,ol,ul,blockquote,table,pre,code,img"));
+                    if ((text && text.length >= 20) || hasRich) {
+                        roots.push({ node, score: text.length + (hasRich ? 10000 : 0) });
+                    }
+                });
+            } catch (_) {}
+        });
+
+        if (roots.length) {
+            roots.sort((a, b) => a.score - b.score);
+            return roots[roots.length - 1].node;
+        }
+
+        return turnContainer;
+    }
+
+    function isTooSmallLatestAnswerElement(element) {
+        if (!element) return true;
+        const text = cleanExportMultiline(element.innerText || element.textContent || "");
+        if (!text) return true;
+        const tag = element.tagName ? element.tagName.toLowerCase() : "";
+        if (text.length < 80) return true;
+        if (["pre", "code", "p", "li"].includes(tag) && text.length < 300) return true;
+        return false;
+    }
+
+
     function scoreLatestAssistantCandidate(element) {
         if (!element || !element.getBoundingClientRect) return -1;
         if (!isVisibleElement(element) || isBridgeOrNonContentElement(element)) return -1;
@@ -1344,14 +1459,1694 @@
         return roleScore + markdownScore + bottomScore + lengthScore;
     }
 
+    function getLatestUserBubbleBoundaryTop() {
+        const main = document.querySelector("main") || document.querySelector('[role="main"]') || document.body;
+        if (!main) return null;
+
+        const candidates = [];
+
+        const addCandidate = (element, roleSource = "") => {
+            if (!element || !element.getBoundingClientRect) return;
+            if (isInsideExportNoise(element)) return;
+
+            const text = cleanExportMultiline(element.innerText || element.textContent || "");
+            if (!text || text.length < 2 || text.length > 3000) return;
+
+            const rect = element.getBoundingClientRect();
+            if (rect.width <= 0 || rect.height <= 0) return;
+
+            candidates.push({
+                element,
+                text,
+                top: rect.top + window.scrollY,
+                bottom: rect.bottom + window.scrollY,
+                left: rect.left,
+                score: (roleSource ? 100000 : 0) + rect.left + Math.min(text.length, 1000)
+            });
+        };
+
+        try {
+            main.querySelectorAll('[data-message-author-role="user"]').forEach((element) => {
+                addCandidate(element, "role");
+            });
+        } catch (_) {}
+
+        // New ChatGPT layouts often render the user prompt as a right-side bubble without stable role attrs.
+        try {
+            main.querySelectorAll("div,p").forEach((element) => {
+                if (!isUserBubbleLike(element)) return;
+
+                // Prefer compact bubble node instead of huge parent.
+                const parent = element.parentElement;
+                if (parent && isUserBubbleLike(parent)) return;
+
+                addCandidate(element, "bubble");
+            });
+        } catch (_) {}
+
+        if (!candidates.length) return null;
+
+        candidates.sort((a, b) => a.bottom - b.bottom || a.score - b.score);
+        return candidates[candidates.length - 1].bottom;
+    }
+
+    function buildAssistantStructuredElementAfterTop(boundaryTop) {
+        const main = document.querySelector("main") || document.querySelector('[role="main"]') || document.body;
+        if (!main || boundaryTop === null || boundaryTop === undefined) return null;
+
+        const selector = [
+            "h1", "h2", "h3", "h4",
+            "p",
+            "ol", "ul",
+            "blockquote",
+            "table",
+            "pre"
+        ].join(",");
+
+        // Find the next user bubble after this boundary, so Alt+W never leaks into later turns.
+        let nextUserTop = Infinity;
+        try {
+            main.querySelectorAll('[data-message-author-role="user"], div, p').forEach((node) => {
+                if (!isUserBubbleLike(node)) return;
+                const rect = node.getBoundingClientRect();
+                const top = rect.top + window.scrollY;
+                if (top > boundaryTop + 2 && top < nextUserTop) {
+                    nextUserTop = top;
+                }
+            });
+        } catch (_) {}
+
+        const items = [];
+        const seen = new Set();
+
+        Array.from(main.querySelectorAll(selector)).forEach((element) => {
+            if (seen.has(element)) return;
+            seen.add(element);
+
+            if (!isLayoutVisibleEnough(element)) return;
+            if (isInsideExportNoise(element)) return;
+            if (isUserBubbleLike(element)) return;
+
+            const rect = element.getBoundingClientRect();
+            const top = rect.top + window.scrollY;
+            if (top <= boundaryTop - 2) return;
+            if (top >= nextUserTop - 2) return;
+
+            const text = cleanExportMultiline(element.innerText || element.textContent || "");
+            const hasMedia = Boolean(element.querySelector("img,table,pre,code"));
+            if ((!text || text.length < 2) && !hasMedia) return;
+            if (isNoisyAutoCopyBlockText(text)) return;
+
+            if (element.closest?.('[data-testid*="composer"], form, textarea, input, [contenteditable="true"]')) return;
+
+            items.push({ element, top, left: rect.left, text });
+        });
+
+        if (!items.length) return null;
+
+        items.sort((a, b) => a.top - b.top || a.left - b.left);
+
+        const selectedSet = new Set(items.map((item) => item.element));
+        const wrapper = document.createElement("div");
+        let count = 0;
+
+        items.forEach((item) => {
+            if (shouldSkipNestedStructuredBlock(item.element, selectedSet)) return;
+
+            const cloned = cleanRichClone(item.element);
+            absolutizeImageSources(cloned);
+            cleanOfficeExportElement(cloned);
+            normalizeOfficeLayoutStyles(cloned);
+            wrapper.appendChild(cloned);
+            count += 1;
+        });
+
+        const text = cleanExportMultiline(wrapper.innerText || wrapper.textContent || "");
+        if (!count || !text || text.length < 20) return null;
+
+        wrapper.setAttribute("data-ai-prompt-bridge-altw-structured", "1");
+        return wrapper;
+    }
+
+    function getLatestOfficialAssistantElement() {
+        try {
+            const nodes = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
+            if (!nodes.length) return null;
+
+            const latest = nodes[nodes.length - 1];
+            const root = getMessageContentRoot(latest) || getPrimaryContentRoot(latest) || latest;
+
+            const clone = cleanRichClone(root);
+            absolutizeImageSources(clone);
+            cleanOfficeExportElement(clone);
+            normalizeOfficeLayoutStyles(clone);
+
+            const text = cleanExportMultiline(clone.innerText || clone.textContent || "");
+            if (!text || text.length < 20) return null;
+
+            const wrapper = document.createElement("div");
+            wrapper.setAttribute("data-ai-prompt-bridge-altw-structured", "1");
+            wrapper.appendChild(clone);
+            return wrapper;
+        } catch (error) {
+            console.warn("[AI Prompt Bridge] latest official assistant extraction failed", error);
+            return null;
+        }
+    }
+
+
+    function getLatestOfficialAssistantElementWholeTurn() {
+        try {
+            const nodes = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
+            if (!nodes.length) return null;
+
+            const latest = nodes[nodes.length - 1];
+            const clone = cleanRichClone(latest);
+            absolutizeImageSources(clone);
+            cleanOfficeExportElement(clone);
+            normalizeOfficeLayoutStyles(clone);
+
+            const text = cleanExportMultiline(clone.innerText || clone.textContent || "");
+            if (!text || text.length < 20) return null;
+
+            const wrapper = document.createElement("div");
+            wrapper.setAttribute("data-ai-prompt-bridge-altw-structured", "1");
+            wrapper.appendChild(clone);
+            return wrapper;
+        } catch (error) {
+            console.warn("[AI Prompt Bridge] latest official assistant whole-turn extraction failed", error);
+            return null;
+        }
+    }
+
+
+    function getMainConversationRoot() {
+        return document.querySelector("main") || document.querySelector('[role="main"]') || document.body;
+    }
+
+    function getComposerTopBoundary() {
+        const candidates = [
+            document.querySelector('[data-testid*="composer"]'),
+            document.querySelector("form textarea")?.closest("form"),
+            document.querySelector("textarea")?.closest("form"),
+            document.querySelector('[contenteditable="true"]')?.closest("form"),
+            document.querySelector("footer")
+        ].filter(Boolean);
+
+        const tops = candidates
+            .map((node) => {
+                try {
+                    const rect = node.getBoundingClientRect();
+                    if (rect.width <= 0 || rect.height <= 0) return null;
+                    return rect.top + window.scrollY;
+                } catch (_) {
+                    return null;
+                }
+            })
+            .filter((value) => typeof value === "number");
+
+        return tops.length ? Math.min(...tops) : Infinity;
+    }
+
+    function getLatestUserPromptBoundaryStrict() {
+        const main = getMainConversationRoot();
+        if (!main) return null;
+
+        const mainRect = main.getBoundingClientRect();
+        const mainLeft = mainRect.left;
+        const mainWidth = Math.max(mainRect.width, 1);
+        const candidates = [];
+
+        const consider = (element, sourceScore = 0) => {
+            if (!element || !element.getBoundingClientRect) return;
+            if (isInsideExportNoise(element)) return;
+
+            const text = cleanExportMultiline(element.innerText || element.textContent || "");
+            if (!text || text.length < 2 || text.length > 4000) return;
+            if (isNoisyAutoCopyBlockText(text)) return;
+
+            const rect = element.getBoundingClientRect();
+            if (rect.width <= 0 || rect.height <= 0) return;
+
+            const style = window.getComputedStyle ? window.getComputedStyle(element) : null;
+            const bg = style?.backgroundColor || "";
+            const radius = parseFloat(style?.borderRadius || "0") || 0;
+
+            const centerX = rect.left + rect.width / 2;
+            const rightAligned = centerX > mainLeft + mainWidth * 0.58 || rect.left > mainLeft + mainWidth * 0.42;
+            const compact = rect.width < mainWidth * 0.82;
+            const bubbleStyle =
+                radius >= 8 ||
+                (!/rgba?\(\s*255\s*,\s*255\s*,\s*255/.test(bg) &&
+                 !/rgba?\(\s*0\s*,\s*0\s*,\s*0\s*,\s*0\s*\)/.test(bg) &&
+                 bg !== "transparent");
+
+            const roleHit = element.matches?.('[data-message-author-role="user"]') ||
+                element.closest?.('[data-message-author-role="user"]');
+
+            if (!roleHit && !(rightAligned && compact && bubbleStyle)) return;
+
+            // Reject assistant code blocks / answer body that happen to be tinted.
+            if (element.closest?.('[data-message-author-role="assistant"]')) return;
+            if (element.querySelector?.("pre,code,table,ul,ol,blockquote") && !roleHit) return;
+
+            candidates.push({
+                element,
+                text,
+                top: rect.top + window.scrollY,
+                bottom: rect.bottom + window.scrollY,
+                area: rect.width * rect.height,
+                sourceScore: roleHit ? 100000 : sourceScore
+            });
+        };
+
+        try {
+            main.querySelectorAll('[data-message-author-role="user"]').forEach((node) => consider(node, 100000));
+        } catch (_) {}
+
+        try {
+            main.querySelectorAll("div,p,article").forEach((node) => consider(node, 0));
+        } catch (_) {}
+
+        if (!candidates.length) return null;
+
+        // Prefer the lowest prompt; for nested duplicates prefer compact/smaller area.
+        candidates.sort((a, b) => {
+            if (Math.abs(a.bottom - b.bottom) > 4) return a.bottom - b.bottom;
+            return (b.sourceScore - a.sourceScore) || (b.area - a.area);
+        });
+
+        const latest = candidates[candidates.length - 1];
+        return {
+            top: latest.top,
+            bottom: latest.bottom,
+            text: latest.text,
+            element: latest.element
+        };
+    }
+
+    function getNextUserBoundaryAfter(startBottom) {
+        const main = getMainConversationRoot();
+        if (!main || startBottom === null || startBottom === undefined) return Infinity;
+
+        const items = [];
+
+        const consider = (element) => {
+            if (!element || !element.getBoundingClientRect) return;
+            if (isInsideExportNoise(element)) return;
+
+            const text = cleanExportMultiline(element.innerText || element.textContent || "");
+            if (!text || text.length < 2 || text.length > 4000) return;
+
+            const rect = element.getBoundingClientRect();
+            const top = rect.top + window.scrollY;
+            if (top <= startBottom + 2) return;
+
+            if (element.matches?.('[data-message-author-role="user"]') || element.closest?.('[data-message-author-role="user"]') || isUserBubbleLike(element)) {
+                items.push(top);
+            }
+        };
+
+        try {
+            main.querySelectorAll('[data-message-author-role="user"], div,p,article').forEach(consider);
+        } catch (_) {}
+
+        return items.length ? Math.min(...items) : Infinity;
+    }
+
+    function buildLatestAnswerFromStrictRange() {
+        const boundary = getLatestUserPromptBoundaryStrict();
+        if (!boundary) return null;
+
+        const main = getMainConversationRoot();
+        if (!main) return null;
+
+        const composerTop = getComposerTopBoundary();
+        const nextUserTop = getNextUserBoundaryAfter(boundary.bottom);
+        const stopTop = Math.min(composerTop, nextUserTop);
+
+        const selector = [
+            "h1", "h2", "h3", "h4",
+            "p",
+            "ol", "ul",
+            "blockquote",
+            "table",
+            "pre"
+        ].join(",");
+
+        const candidates = [];
+        const seen = new Set();
+
+        Array.from(main.querySelectorAll(selector)).forEach((element) => {
+            if (seen.has(element)) return;
+            seen.add(element);
+
+            if (!isLayoutVisibleEnough(element)) return;
+            if (isInsideExportNoise(element)) return;
+            if (isUserBubbleLike(element)) return;
+            if (element.closest?.('[data-message-author-role="user"]')) return;
+
+            const rect = element.getBoundingClientRect();
+            const top = rect.top + window.scrollY;
+            if (top <= boundary.bottom + 2) return;
+            if (top >= stopTop - 2) return;
+
+            const text = cleanExportMultiline(element.innerText || element.textContent || "");
+            const hasMedia = Boolean(element.querySelector("img,table,pre,code"));
+            if ((!text || text.length < 2) && !hasMedia) return;
+            if (isNoisyAutoCopyBlockText(text)) return;
+            if (element.closest?.('[data-testid*="composer"], form, textarea, input, [contenteditable="true"]')) return;
+
+            candidates.push({ element, top, left: rect.left, text });
+        });
+
+        if (!candidates.length) return null;
+
+        candidates.sort((a, b) => a.top - b.top || a.left - b.left);
+
+        const selectedSet = new Set(candidates.map((item) => item.element));
+        const wrapper = document.createElement("div");
+        wrapper.setAttribute("data-ai-prompt-bridge-altw-structured", "1");
+        wrapper.setAttribute("data-ai-prompt-bridge-range-boundary", boundary.text.slice(0, 80));
+
+        let count = 0;
+        candidates.forEach((item) => {
+            if (shouldSkipNestedStructuredBlock(item.element, selectedSet)) return;
+            const cloned = cleanRichClone(item.element);
+            absolutizeImageSources(cloned);
+            cleanOfficeExportElement(cloned);
+            normalizeOfficeLayoutStyles(cloned);
+            wrapper.appendChild(cloned);
+            count += 1;
+        });
+
+        const text = cleanExportMultiline(wrapper.innerText || wrapper.textContent || "");
+        if (!count || !text || text.length < 20) return null;
+
+        return wrapper;
+    }
+
+
+    function getLatestAssistantToolbarBoundary() {
+        const main = getMainConversationRoot();
+        if (!main) return null;
+
+        const composerTop = getComposerTopBoundary();
+        const candidates = [];
+        const seen = new Set();
+
+        const consider = (element) => {
+            if (!element || seen.has(element) || !element.getBoundingClientRect) return;
+            seen.add(element);
+
+            if (isInsideExportNoise(element)) return;
+            if (element.closest?.("pre,code,table")) return;
+
+            const buttons = Array.from(element.querySelectorAll?.("button,[role='button']") || []);
+            if (buttons.length < 3) return;
+
+            const text = cleanExportMultiline(element.innerText || element.textContent || "");
+            // Assistant action toolbar should be mostly icons, not content.
+            if (text.length > 80) return;
+
+            const rect = element.getBoundingClientRect();
+            if (rect.width <= 0 || rect.height <= 0) return;
+
+            const top = rect.top + window.scrollY;
+            const bottom = rect.bottom + window.scrollY;
+            if (top >= composerTop - 2) return;
+
+            // Must be below some meaningful assistant text/pre.
+            const hasMeaningfulBefore = Array.from(main.querySelectorAll("p,ol,ul,blockquote,table,pre,h1,h2,h3,h4"))
+                .some((node) => {
+                    if (!node.getBoundingClientRect || isInsideExportNoise(node) || isUserBubbleLike(node)) return false;
+                    const r = node.getBoundingClientRect();
+                    const nodeBottom = r.bottom + window.scrollY;
+                    if (nodeBottom >= top - 2) return false;
+                    const t = cleanExportMultiline(node.innerText || node.textContent || "");
+                    return t.length >= 2 || node.querySelector?.("img,table,pre,code");
+                });
+            if (!hasMeaningfulBefore) return;
+
+            candidates.push({ element, top, bottom, buttonCount: buttons.length });
+        };
+
+        try {
+            main.querySelectorAll("div").forEach((div) => {
+                consider(div);
+                // Parent row sometimes owns the visual toolbar while children own buttons.
+                if (div.parentElement) consider(div.parentElement);
+            });
+        } catch (_) {}
+
+        if (!candidates.length) return null;
+
+        // Choose the lowest toolbar before composer.
+        candidates.sort((a, b) => a.top - b.top || a.buttonCount - b.buttonCount);
+        const latest = candidates[candidates.length - 1];
+
+        return {
+            top: latest.top,
+            bottom: latest.bottom,
+            element: latest.element
+        };
+    }
+
+    function getLatestUserBoundaryBefore(topLimit) {
+        const main = getMainConversationRoot();
+        if (!main) return null;
+
+        const mainRect = main.getBoundingClientRect();
+        const mainLeft = mainRect.left;
+        const mainWidth = Math.max(mainRect.width, 1);
+        const candidates = [];
+        const seen = new Set();
+
+        const consider = (element, sourceScore = 0) => {
+            if (!element || seen.has(element) || !element.getBoundingClientRect) return;
+            seen.add(element);
+
+            if (isInsideExportNoise(element)) return;
+            if (element.closest?.('[data-message-author-role="assistant"]')) return;
+
+            const text = cleanExportMultiline(element.innerText || element.textContent || "");
+            if (!text || text.length < 2 || text.length > 3000) return;
+            if (isNoisyAutoCopyBlockText(text)) return;
+
+            const rect = element.getBoundingClientRect();
+            if (rect.width <= 0 || rect.height <= 0) return;
+
+            const top = rect.top + window.scrollY;
+            const bottom = rect.bottom + window.scrollY;
+            if (bottom >= topLimit - 2) return;
+
+            const centerX = rect.left + rect.width / 2;
+            const rightAligned =
+                centerX > mainLeft + mainWidth * 0.56 ||
+                rect.left > mainLeft + mainWidth * 0.42 ||
+                rect.right > mainLeft + mainWidth * 0.78;
+
+            const compact = rect.width < mainWidth * 0.88;
+            const roleHit = element.matches?.('[data-message-author-role="user"]') ||
+                element.closest?.('[data-message-author-role="user"]');
+
+            if (!roleHit && !(rightAligned && compact)) return;
+
+            // Avoid selecting parent containers that include previous assistant toolbars/content.
+            if (element.querySelector?.("pre,code,table,ol,ul,blockquote") && !roleHit) return;
+
+            candidates.push({
+                element,
+                text,
+                top,
+                bottom,
+                area: rect.width * rect.height,
+                score: (roleHit ? 100000 : sourceScore) + bottom
+            });
+        };
+
+        try {
+            main.querySelectorAll('[data-message-author-role="user"]').forEach((node) => consider(node, 100000));
+        } catch (_) {}
+
+        try {
+            main.querySelectorAll("div,p,article").forEach((node) => consider(node, 0));
+        } catch (_) {}
+
+        if (!candidates.length) return null;
+
+        candidates.sort((a, b) => {
+            if (Math.abs(a.bottom - b.bottom) > 4) return a.bottom - b.bottom;
+            return (a.area - b.area) || (a.score - b.score);
+        });
+
+        const latest = candidates[candidates.length - 1];
+        return {
+            top: latest.top,
+            bottom: latest.bottom,
+            text: latest.text,
+            element: latest.element
+        };
+    }
+
+    function buildLatestAnswerFromToolbarRange() {
+        const toolbar = getLatestAssistantToolbarBoundary();
+        if (!toolbar) return null;
+
+        const userBoundary = getLatestUserBoundaryBefore(toolbar.top);
+        if (!userBoundary) return null;
+
+        const main = getMainConversationRoot();
+        if (!main) return null;
+
+        const selector = [
+            "h1", "h2", "h3", "h4",
+            "p",
+            "ol", "ul",
+            "blockquote",
+            "table",
+            "pre"
+        ].join(",");
+
+        const candidates = [];
+        const seen = new Set();
+
+        Array.from(main.querySelectorAll(selector)).forEach((element) => {
+            if (seen.has(element)) return;
+            seen.add(element);
+
+            if (!isLayoutVisibleEnough(element)) return;
+            if (isInsideExportNoise(element)) return;
+            if (isUserBubbleLike(element)) return;
+            if (element.closest?.('[data-message-author-role="user"]')) return;
+
+            const rect = element.getBoundingClientRect();
+            const top = rect.top + window.scrollY;
+            const bottom = rect.bottom + window.scrollY;
+
+            // Strict answer range: after latest user prompt, before latest assistant toolbar.
+            if (top <= userBoundary.bottom + 1) return;
+            if (top >= toolbar.top - 1) return;
+
+            const text = cleanExportMultiline(element.innerText || element.textContent || "");
+            const hasMedia = Boolean(element.querySelector("img,table,pre,code"));
+            if ((!text || text.length < 2) && !hasMedia) return;
+            if (isNoisyAutoCopyBlockText(text)) return;
+
+            if (element.closest?.('[data-testid*="composer"], form, textarea, input, [contenteditable="true"]')) return;
+
+            candidates.push({ element, top, bottom, left: rect.left, text });
+        });
+
+        if (!candidates.length) return null;
+
+        candidates.sort((a, b) => a.top - b.top || a.left - b.left);
+
+        const selectedSet = new Set(candidates.map((item) => item.element));
+        const wrapper = document.createElement("div");
+        wrapper.setAttribute("data-ai-prompt-bridge-altw-toolbar-range", "1");
+        wrapper.setAttribute("data-ai-prompt-bridge-user-boundary", userBoundary.text.slice(0, 80));
+
+        let count = 0;
+        candidates.forEach((item) => {
+            if (shouldSkipNestedStructuredBlock(item.element, selectedSet)) return;
+
+            const cloned = cleanRichClone(item.element);
+            absolutizeImageSources(cloned);
+            cleanOfficeExportElement(cloned);
+            normalizeOfficeLayoutStyles(cloned);
+            wrapper.appendChild(cloned);
+            count += 1;
+        });
+
+        const text = cleanExportMultiline(wrapper.innerText || wrapper.textContent || "");
+        if (!count || !text || text.length < 20) return null;
+
+        return wrapper;
+    }
+
+
+    function isAssistantToolbarElement(element) {
+        if (!element || !element.querySelectorAll) return false;
+        if (isInsideExportNoise(element)) return false;
+
+        const buttons = Array.from(element.querySelectorAll("button,[role='button']"));
+        if (buttons.length < 3) return false;
+
+        const text = cleanExportMultiline(element.innerText || element.textContent || "");
+        if (text.length > 120) return false;
+
+        return true;
+    }
+
+    function removeToolbarAndNoiseFromClone(clone) {
+        if (!clone || !clone.querySelectorAll) return clone;
+
+        Array.from(clone.querySelectorAll("button,[role='button'],svg")).forEach((node) => {
+            const toolbar = node.closest("div");
+            if (toolbar && isAssistantToolbarElement(toolbar)) {
+                toolbar.remove();
+            } else {
+                node.remove();
+            }
+        });
+
+        Array.from(clone.querySelectorAll('[data-testid*="composer"], form, textarea, input, [contenteditable="true"]')).forEach((node) => {
+            node.remove();
+        });
+
+        return clone;
+    }
+
+    function getLatestAssistantToolbarElement() {
+        const boundary = getLatestAssistantToolbarBoundary ? getLatestAssistantToolbarBoundary() : null;
+        return boundary?.element || null;
+    }
+
+    function buildLatestAnswerFromToolbarContainer() {
+        const toolbar = getLatestAssistantToolbarElement();
+        if (!toolbar) return null;
+
+        const main = getMainConversationRoot();
+        if (!main) return null;
+
+        let best = null;
+        let node = toolbar.parentElement;
+        let depth = 0;
+
+        while (node && node !== document.body && depth < 12) {
+            if (node === main.parentElement) break;
+            if (isInsideExportNoise(node)) {
+                node = node.parentElement;
+                depth += 1;
+                continue;
+            }
+
+            const rect = node.getBoundingClientRect?.();
+            const text = cleanExportMultiline(node.innerText || node.textContent || "");
+            const hasToolbar = node.contains(toolbar);
+            const hasComposer = Boolean(node.querySelector?.('[data-testid*="composer"], textarea, input, [contenteditable="true"]'));
+            const hasUser = Boolean(node.querySelector?.('[data-message-author-role="user"]'));
+
+            if (
+                hasToolbar &&
+                !hasComposer &&
+                !hasUser &&
+                text &&
+                text.length >= 20 &&
+                rect &&
+                rect.width > 0 &&
+                rect.height > 0
+            ) {
+                const clone = cleanRichClone(node);
+                convertRenderedCodeBlocksToPre(clone);
+                removeToolbarAndNoiseFromClone(clone);
+                absolutizeImageSources(clone);
+                cleanOfficeExportElement(clone);
+                normalizeOfficeLayoutStyles(clone);
+
+                const cloneText = cleanExportMultiline(clone.innerText || clone.textContent || "");
+                const richScore = clone.querySelectorAll("p,ol,ul,blockquote,table,pre,code,h1,h2,h3,h4").length * 100;
+                const score = cloneText.length + richScore - depth * 30;
+
+                // Avoid choosing a huge container that includes older answers.
+                if (cloneText.length < 30000 && (!best || score > best.score)) {
+                    best = { element: clone, text: cloneText, score, depth };
+                }
+            }
+
+            node = node.parentElement;
+            depth += 1;
+        }
+
+        if (!best || !best.text || best.text.length < 20) return null;
+
+        const wrapper = document.createElement("div");
+        wrapper.setAttribute("data-ai-prompt-bridge-altw-container", "1");
+        wrapper.appendChild(best.element);
+        return wrapper;
+    }
+
+
+    function cloneRangeBetweenElements(startBoundaryElement, endBoundaryElement) {
+        try {
+            if (!startBoundaryElement || !endBoundaryElement) return null;
+
+            const range = document.createRange();
+            range.setStartAfter(startBoundaryElement);
+            range.setEndBefore(endBoundaryElement);
+
+            const frag = range.cloneContents();
+            const wrapper = document.createElement("div");
+            wrapper.setAttribute("data-ai-prompt-bridge-altw-range-clone", "1");
+            wrapper.appendChild(frag);
+
+            return wrapper;
+        } catch (error) {
+            console.warn("[AI Prompt Bridge] clone range failed", error);
+            return null;
+        }
+    }
+
+    function findPreviousAssistantToolbarBefore(topLimit) {
+        const main = getMainConversationRoot();
+        if (!main || topLimit === null || topLimit === undefined) return null;
+
+        const toolbars = [];
+        try {
+            main.querySelectorAll("div").forEach((node) => {
+                if (!isAssistantToolbarElement(node)) return;
+                const rect = node.getBoundingClientRect();
+                const bottom = rect.bottom + window.scrollY;
+                if (bottom < topLimit - 2) {
+                    toolbars.push({ element: node, bottom });
+                }
+            });
+        } catch (_) {}
+
+        if (!toolbars.length) return null;
+        toolbars.sort((a, b) => a.bottom - b.bottom);
+        return toolbars[toolbars.length - 1].element;
+    }
+
+    function buildLatestAnswerFromToolbarRangeClone() {
+        const toolbar = getLatestAssistantToolbarElement();
+        if (!toolbar) return null;
+
+        const toolbarRect = toolbar.getBoundingClientRect();
+        const toolbarTop = toolbarRect.top + window.scrollY;
+
+        const userBoundary = getLatestUserBoundaryBefore(toolbarTop);
+
+        // v1.71:
+        // Do not use previous assistant toolbar as a fallback start boundary.
+        // After F5 / page restore, user bubble detection may be late; using the previous toolbar
+        // can clone multiple old answers and produce a huge 7k+ character export.
+        // If the latest user boundary is not ready, fail this path and let safer fallbacks run.
+        if (!userBoundary?.element) return null;
+
+        let wrapper = cloneRangeBetweenElements(userBoundary.element, toolbar);
+        if (!wrapper) return null;
+
+        // Remove any accidentally cloned old messages / user bubbles.
+        try {
+            wrapper.querySelectorAll('[data-message-author-role="user"]').forEach((node) => node.remove());
+        } catch (_) {}
+
+        // Convert ChatGPT fake/plaintext code blocks before generic cleanup removes layout clues.
+        convertRenderedCodeBlocksToPre(wrapper);
+
+        removeToolbarAndNoiseFromClone(wrapper);
+        removeLeadingUserPromptFromAltW(wrapper);
+        removeExportNoiseNodes(wrapper);
+        absolutizeImageSources(wrapper);
+        cleanOfficeExportElement(wrapper);
+        normalizeOfficeLayoutStyles(wrapper);
+
+        const text = cleanExportMultiline(wrapper.innerText || wrapper.textContent || "");
+        if (!text || text.length < 20) return null;
+
+        // Guardrail: Alt+W is latest answer only, not full session.
+        // If the cloned range still looks too large and contains multiple old toolbars, reject it.
+        const toolbarCount = Array.from(wrapper.querySelectorAll("div")).filter((node) => isAssistantToolbarElement(node)).length;
+        if (toolbarCount > 1 || text.length > 12000) return null;
+
+        return wrapper;
+    }
+
+
+    function isVisibleInViewportForAltW(element) {
+        if (!element || !element.getBoundingClientRect) return false;
+        const rect = element.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return false;
+        if (rect.bottom <= 0 || rect.top >= window.innerHeight) return false;
+
+        const style = window.getComputedStyle ? window.getComputedStyle(element) : null;
+        if (style && (style.display === "none" || style.visibility === "hidden" || style.opacity === "0")) {
+            return false;
+        }
+
+        return true;
+    }
+
+    function getLatestVisibleAssistantToolbarElement() {
+        const main = getMainConversationRoot();
+        if (!main) return null;
+
+        const composerTop = getComposerTopBoundary();
+        const candidates = [];
+        const seen = new Set();
+
+        const consider = (element) => {
+            if (!element || seen.has(element) || !element.getBoundingClientRect) return;
+            seen.add(element);
+
+            if (!isAssistantToolbarElement(element)) return;
+            if (!isVisibleInViewportForAltW(element)) return;
+            if (isInsideExportNoise(element)) return;
+
+            const rect = element.getBoundingClientRect();
+            const top = rect.top + window.scrollY;
+            const bottom = rect.bottom + window.scrollY;
+
+            if (top >= composerTop - 2) return;
+
+            candidates.push({
+                element,
+                top,
+                bottom,
+                viewportTop: rect.top,
+                viewportBottom: rect.bottom
+            });
+        };
+
+        try {
+            main.querySelectorAll("div").forEach((div) => {
+                consider(div);
+                if (div.parentElement) consider(div.parentElement);
+            });
+        } catch (_) {}
+
+        if (!candidates.length) return null;
+
+        // Pick the visible assistant toolbar closest to the composer / bottom of viewport.
+        candidates.sort((a, b) => a.viewportTop - b.viewportTop || a.top - b.top);
+        return candidates[candidates.length - 1].element;
+    }
+
+    function getLatestVisibleUserBoundaryBefore(toolbarElement) {
+        const main = getMainConversationRoot();
+        if (!main || !toolbarElement?.getBoundingClientRect) return null;
+
+        const toolbarRect = toolbarElement.getBoundingClientRect();
+        const toolbarTopAbs = toolbarRect.top + window.scrollY;
+
+        const mainRect = main.getBoundingClientRect();
+        const mainLeft = mainRect.left;
+        const mainWidth = Math.max(mainRect.width, 1);
+
+        const candidates = [];
+        const seen = new Set();
+
+        const consider = (element, sourceScore = 0) => {
+            if (!element || seen.has(element) || !element.getBoundingClientRect) return;
+            seen.add(element);
+
+            if (isInsideExportNoise(element)) return;
+            if (element.closest?.('[data-message-author-role="assistant"]')) return;
+            if (!isVisibleInViewportForAltW(element)) return;
+
+            const text = cleanExportMultiline(element.innerText || element.textContent || "");
+            if (!text || text.length < 2 || text.length > 4000) return;
+            if (isNoisyAutoCopyBlockText(text) || isExportNoiseText?.(text)) return;
+
+            const rect = element.getBoundingClientRect();
+            const top = rect.top + window.scrollY;
+            const bottom = rect.bottom + window.scrollY;
+
+            if (bottom >= toolbarTopAbs - 2) return;
+
+            const centerX = rect.left + rect.width / 2;
+            const rightAligned =
+                centerX > mainLeft + mainWidth * 0.56 ||
+                rect.left > mainLeft + mainWidth * 0.42 ||
+                rect.right > mainLeft + mainWidth * 0.78;
+
+            const compact = rect.width < mainWidth * 0.88;
+            const roleHit = element.matches?.('[data-message-author-role="user"]') ||
+                element.closest?.('[data-message-author-role="user"]');
+
+            if (!roleHit && !(rightAligned && compact)) return;
+            if (element.querySelector?.("pre,code,table,ol,ul,blockquote") && !roleHit) return;
+
+            candidates.push({
+                element,
+                text,
+                top,
+                bottom,
+                viewportBottom: rect.bottom,
+                area: rect.width * rect.height,
+                score: (roleHit ? 100000 : sourceScore) + bottom
+            });
+        };
+
+        try {
+            main.querySelectorAll('[data-message-author-role="user"]').forEach((node) => consider(node, 100000));
+        } catch (_) {}
+
+        try {
+            main.querySelectorAll("div,p,article").forEach((node) => consider(node, 0));
+        } catch (_) {}
+
+        if (!candidates.length) return null;
+
+        candidates.sort((a, b) => {
+            if (Math.abs(a.bottom - b.bottom) > 4) return a.bottom - b.bottom;
+            return (a.area - b.area) || (a.score - b.score);
+        });
+
+        const latest = candidates[candidates.length - 1];
+        return {
+            top: latest.top,
+            bottom: latest.bottom,
+            text: latest.text,
+            element: latest.element
+        };
+    }
+
+    function buildLatestAnswerFromVisibleToolbarRangeClone() {
+        const toolbar = getLatestVisibleAssistantToolbarElement();
+        if (!toolbar) return null;
+
+        const userBoundary = getLatestVisibleUserBoundaryBefore(toolbar);
+        if (!userBoundary?.element) return null;
+
+        const wrapper = cloneRangeBetweenElements(userBoundary.element, toolbar);
+        if (!wrapper) return null;
+
+        wrapper.setAttribute("data-ai-prompt-bridge-altw-visible-range", "1");
+
+        try {
+            wrapper.querySelectorAll('[data-message-author-role="user"]').forEach((node) => node.remove());
+        } catch (_) {}
+
+        convertRenderedCodeBlocksToPre(wrapper);
+        removeToolbarAndNoiseFromClone(wrapper);
+        removeLeadingUserPromptFromAltW(wrapper);
+        removeExportNoiseNodes(wrapper);
+        absolutizeImageSources(wrapper);
+        cleanOfficeExportElement(wrapper);
+        normalizeOfficeLayoutStyles(wrapper);
+
+        const text = cleanExportMultiline(wrapper.innerText || wrapper.textContent || "");
+        if (!text || text.length < 20) return null;
+
+        // Guardrail: if it still looks like an old/full-session capture, reject this path.
+        if (
+            text.length > 12000 ||
+            text.includes("今天 上午1:53") ||
+            text.includes("下一版我已經先做成 v5.2 Stable UI") ||
+            text.includes("處理時間為 11s")
+        ) {
+            return null;
+        }
+
+        return wrapper;
+    }
+
+
+    function buildLatestAnswerFromGuardedToolbarContainer() {
+        const candidate = buildLatestAnswerFromToolbarContainer();
+        if (!candidate) return null;
+
+        try {
+            const text = cleanExportMultiline(candidate.innerText || candidate.textContent || "");
+            if (!text || text.length < 20) return null;
+
+            // Correct Alt+W for this ChatGPT Project layout is a single answer block.
+            // It can be ~1k-5k chars with code blocks, but it must not be full session / composer draft.
+            if (isBadAltWExportText(text)) return null;
+
+            const toolbarCount = candidate.querySelectorAll
+                ? Array.from(candidate.querySelectorAll("div")).filter((node) => isAssistantToolbarElement(node)).length
+                : 0;
+            if (toolbarCount > 1) return null;
+
+            const userRoleCount = candidate.querySelectorAll
+                ? candidate.querySelectorAll('[data-message-author-role="user"]').length
+                : 0;
+            if (userRoleCount > 0) return null;
+
+            if (candidate.querySelector?.('[data-testid*="composer"], textarea, input, [contenteditable="true"], form')) {
+                return null;
+            }
+
+            return candidate;
+        } catch (error) {
+            console.warn("[AI Prompt Bridge] guarded toolbar container rejected", error);
+            return null;
+        }
+    }
+
+
+    function sanitizeAltWMarkdownRootForOffice(root) {
+        if (!root) return null;
+
+        try {
+            const cleanRoot = document.createElement("div");
+            cleanRoot.setAttribute("data-ai-prompt-bridge-altw-office-clean", "1");
+            cleanRoot.style.fontFamily = '"Microsoft JhengHei", "Noto Sans TC", "Segoe UI", Arial, sans-serif';
+            cleanRoot.style.fontSize = "20pt";
+            cleanRoot.style.lineHeight = "1.6";
+            cleanRoot.style.color = "#111827";
+            cleanRoot.style.background = "#ffffff";
+            cleanRoot.style.backgroundColor = "#ffffff";
+
+            const baseTextStyle = (node) => {
+                node.removeAttribute?.("class");
+                node.removeAttribute?.("bgcolor");
+                node.style.fontFamily = '"Microsoft JhengHei", "Noto Sans TC", "Segoe UI", Arial, sans-serif';
+                node.style.setProperty("font-size", "20pt", "important");
+                node.style.lineHeight = "1.6";
+                node.style.color = "#111827";
+                node.style.background = "transparent";
+                node.style.backgroundColor = "transparent";
+                node.style.boxShadow = "none";
+            };
+
+            const appendTextWithBr = (parent, text) => {
+                const raw = String(text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/\n{3,}/g, "\n\n");
+                raw.split("\n").forEach((line, index) => {
+                    if (index > 0) parent.appendChild(document.createElement("br"));
+                    parent.appendChild(document.createTextNode(line));
+                });
+            };
+
+            const makeParagraph = (text) => {
+                const normalized = cleanExportMultiline(text || "");
+                if (!normalized) return null;
+                const p = document.createElement("p");
+                appendTextWithBr(p, normalized);
+                baseTextStyle(p);
+                p.style.margin = "0 0 10pt";
+                return p;
+            };
+
+            const makeOfficeCodeBlock = (text) => {
+                const table = document.createElement("table");
+                table.setAttribute("data-ai-prompt-bridge-codeblock", "1");
+                table.setAttribute("cellpadding", "0");
+                table.setAttribute("cellspacing", "0");
+                table.setAttribute("border", "0");
+                table.setAttribute("frame", "void");
+                table.setAttribute("rules", "none");
+                table.style.borderCollapse = "collapse";
+                table.style.borderSpacing = "0";
+                table.style.margin = "8pt 0 12pt";
+                table.style.width = "100%";
+                table.style.background = "#f3f4f6";
+                table.style.backgroundColor = "#f3f4f6";
+                table.style.border = "0";
+                table.style.borderColor = "transparent";
+                table.style.borderRadius = "8pt";
+                table.style.boxShadow = "none";
+                table.style.cssText += ";mso-border-alt:none;mso-padding-alt:0;mso-table-lspace:0pt;mso-table-rspace:0pt;";
+
+                const normalizeCodeLine = (line) => {
+                    const value = String(line || "")
+                        .replace(/\t/g, "    ")
+                        .replace(/ /g, "\u00A0");
+                    return value || "\u00A0";
+                };
+
+                String(text || "")
+                    .replace(/\r\n/g, "\n")
+                    .replace(/\r/g, "\n")
+                    .replace(/\n{3,}/g, "\n\n")
+                    .trim()
+                    .split("\n")
+                    .forEach((line, index) => {
+                        const tr = document.createElement("tr");
+                        tr.setAttribute("data-ai-prompt-bridge-codeblock-line", "1");
+
+                        const td = document.createElement("td");
+                        td.setAttribute("data-ai-prompt-bridge-codeblock-cell", "1");
+                        td.style.fontFamily = 'Consolas, "Microsoft JhengHei", "Noto Sans TC", monospace';
+                        td.style.setProperty("font-size", "20pt", "important");
+                        td.style.lineHeight = "1.45";
+                        td.style.color = "#111827";
+                        td.style.background = "#f3f4f6";
+                        td.style.backgroundColor = "#f3f4f6";
+                        td.style.border = "0";
+                        td.style.borderTop = "0";
+                        td.style.borderBottom = "0";
+                        td.style.borderLeft = "0";
+                        td.style.borderRight = "0";
+                        td.style.borderColor = "transparent";
+                        td.style.padding = index === 0 ? "10pt 12pt 0" : "0 12pt";
+                        td.style.verticalAlign = "top";
+                        td.style.cssText += ";mso-border-alt:none;";
+                        td.style.whiteSpace = "nowrap";
+                        td.style.wordBreak = "normal";
+                        td.style.overflowWrap = "normal";
+                        td.style.boxShadow = "none";
+                        td.textContent = normalizeCodeLine(line);
+
+                        tr.appendChild(td);
+                        table.appendChild(tr);
+                    });
+
+                const lastCell = table.querySelector("tr:last-child td");
+                if (lastCell) {
+                    lastCell.style.paddingBottom = "10pt";
+                }
+
+                return table;
+            };
+
+            const appendCleanNode = (node, parent) => {
+                if (!node) return;
+
+                if (node.nodeType === Node.TEXT_NODE) {
+                    const value = node.nodeValue || "";
+                    if (value.trim()) {
+                        parent.appendChild(document.createTextNode(value));
+                    }
+                    return;
+                }
+
+                if (node.nodeType !== Node.ELEMENT_NODE) return;
+
+                const tag = node.tagName;
+
+                if (node.closest?.("button, svg, nav, aside, header, footer, form, textarea, input")) return;
+
+                if (tag === "PRE") {
+                    const block = makeOfficeCodeBlock(node.innerText || node.textContent || "");
+                    parent.appendChild(block);
+                    return;
+                }
+
+                if (tag === "CODE") {
+                    // Inline code remains plain text / monospace is not worth risking Word highlight leakage.
+                    // Code blocks are handled above as Office one-cell tables.
+                    const text = cleanExportMultiline(node.innerText || node.textContent || "");
+                    if (text) parent.appendChild(document.createTextNode(text));
+                    return;
+                }
+
+                if (tag === "SPAN" || tag === "MARK") {
+                    // Do not keep spans/marks because Word/OneNote preserve their background as highlight.
+                    Array.from(node.childNodes).forEach((child) => appendCleanNode(child, parent));
+                    return;
+                }
+
+                if (/^(P|DIV|SECTION|ARTICLE)$/.test(tag)) {
+                    const hasStructuralChild = node.querySelector?.("pre, ul, ol, blockquote, table, h1, h2, h3, h4");
+                    if (!hasStructuralChild) {
+                        const p = makeParagraph(node.innerText || node.textContent || "");
+                        if (p) parent.appendChild(p);
+                        return;
+                    }
+
+                    Array.from(node.childNodes).forEach((child) => appendCleanNode(child, parent));
+                    return;
+                }
+
+                if (/^(H1|H2|H3|H4)$/.test(tag)) {
+                    const h = document.createElement(tag.toLowerCase());
+                    appendTextWithBr(h, cleanExportMultiline(node.innerText || node.textContent || ""));
+                    baseTextStyle(h);
+                    h.style.fontSize = tag === "H1" ? "24pt" : "22pt";
+                    h.style.fontWeight = "700";
+                    h.style.margin = "14pt 0 8pt";
+                    parent.appendChild(h);
+                    return;
+                }
+
+                if (tag === "BR") {
+                    parent.appendChild(document.createElement("br"));
+                    return;
+                }
+
+                if (tag === "UL" || tag === "OL") {
+                    const list = document.createElement(tag.toLowerCase());
+                    baseTextStyle(list);
+                    list.style.margin = "6pt 0 10pt 24pt";
+                    list.style.paddingLeft = "20pt";
+                    Array.from(node.children || []).forEach((child) => appendCleanNode(child, list));
+                    parent.appendChild(list);
+                    return;
+                }
+
+                if (tag === "LI") {
+                    const li = document.createElement("li");
+                    baseTextStyle(li);
+                    li.style.margin = "0 0 6pt";
+                    if (node.querySelector?.("pre, ul, ol")) {
+                        Array.from(node.childNodes).forEach((child) => appendCleanNode(child, li));
+                    } else {
+                        appendTextWithBr(li, cleanExportMultiline(node.innerText || node.textContent || ""));
+                    }
+                    parent.appendChild(li);
+                    return;
+                }
+
+                if (tag === "BLOCKQUOTE") {
+                    const quote = document.createElement("blockquote");
+                    baseTextStyle(quote);
+                    quote.style.borderLeft = "4pt solid #d1d5db";
+                    quote.style.paddingLeft = "10pt";
+                    quote.style.margin = "8pt 0 12pt";
+                    Array.from(node.childNodes).forEach((child) => appendCleanNode(child, quote));
+                    parent.appendChild(quote);
+                    return;
+                }
+
+                if (tag === "TABLE") {
+                    const table = document.createElement("table");
+                    table.style.borderCollapse = "collapse";
+                    table.style.margin = "8pt 0 12pt";
+                    table.style.width = "100%";
+                    table.style.background = "transparent";
+                    table.style.backgroundColor = "transparent";
+
+                    Array.from(node.rows || []).forEach((row) => {
+                        const tr = document.createElement("tr");
+                        Array.from(row.cells || []).forEach((cell) => {
+                            const outCell = document.createElement(cell.tagName === "TH" ? "th" : "td");
+                            appendTextWithBr(outCell, cleanExportMultiline(cell.innerText || cell.textContent || ""));
+                            baseTextStyle(outCell);
+                            outCell.style.border = "1px solid #d1d5db";
+                            outCell.style.padding = "4pt 6pt";
+                            outCell.style.background = "transparent";
+                            outCell.style.backgroundColor = "transparent";
+                            tr.appendChild(outCell);
+                        });
+                        table.appendChild(tr);
+                    });
+                    parent.appendChild(table);
+                    return;
+                }
+
+                if (tag === "STRONG" || tag === "B") {
+                    const strong = document.createElement("strong");
+                    Array.from(node.childNodes).forEach((child) => appendCleanNode(child, strong));
+                    strong.style.fontWeight = "700";
+                    strong.style.background = "transparent";
+                    strong.style.backgroundColor = "transparent";
+                    strong.style.setProperty("font-size", "20pt", "important");
+                    parent.appendChild(strong);
+                    return;
+                }
+
+                if (tag === "EM" || tag === "I") {
+                    const em = document.createElement("em");
+                    Array.from(node.childNodes).forEach((child) => appendCleanNode(child, em));
+                    em.style.fontStyle = "italic";
+                    em.style.background = "transparent";
+                    em.style.backgroundColor = "transparent";
+                    em.style.setProperty("font-size", "20pt", "important");
+                    parent.appendChild(em);
+                    return;
+                }
+
+                Array.from(node.childNodes).forEach((child) => appendCleanNode(child, parent));
+            };
+
+            Array.from(root.childNodes).forEach((child) => appendCleanNode(child, cleanRoot));
+
+            // Final cleanup: no ChatGPT classes / marks / spans / bgcolor, but keep our codeblock tables.
+            cleanRoot.querySelectorAll("span, mark").forEach((bad) => {
+                const fragment = document.createDocumentFragment();
+                Array.from(bad.childNodes).forEach((child) => fragment.appendChild(child.cloneNode(true)));
+                bad.replaceWith(fragment);
+            });
+
+            cleanRoot.querySelectorAll("*").forEach((node) => {
+                node.removeAttribute("class");
+                node.removeAttribute("bgcolor");
+                node.style.setProperty("font-size", "20pt", "important");
+
+                if (!node.closest?.('[data-ai-prompt-bridge-codeblock="1"]')) {
+                    node.style.background = "transparent";
+                    node.style.backgroundColor = "transparent";
+                    node.style.boxShadow = "none";
+                }
+            });
+
+            cleanRoot.querySelectorAll('[data-ai-prompt-bridge-codeblock="1"]').forEach((table) => {
+                table.style.background = "#f3f4f6";
+                table.style.backgroundColor = "#f3f4f6";
+                table.setAttribute("border", "0");
+                table.setAttribute("frame", "void");
+                table.setAttribute("rules", "none");
+                table.style.border = "0";
+                table.style.borderColor = "transparent";
+                table.style.borderRadius = "8pt";
+                table.style.borderCollapse = "collapse";
+                table.style.borderSpacing = "0";
+                table.style.margin = "8pt 0 12pt";
+                table.style.width = "100%";
+                table.style.boxShadow = "none";
+                table.style.cssText += ";mso-border-alt:none;mso-padding-alt:0;mso-table-lspace:0pt;mso-table-rspace:0pt;";
+            });
+
+            cleanRoot.querySelectorAll('[data-ai-prompt-bridge-codeblock-cell="1"]').forEach((td) => {
+                td.style.background = "#f3f4f6";
+                td.style.backgroundColor = "#f3f4f6";
+                td.style.border = "0";
+                td.style.borderTop = "0";
+                td.style.borderBottom = "0";
+                td.style.borderLeft = "0";
+                td.style.borderRight = "0";
+                td.style.borderColor = "transparent";
+                td.style.cssText += ";mso-border-alt:none;";
+                td.style.fontFamily = 'Consolas, "Microsoft JhengHei", "Noto Sans TC", monospace';
+                td.style.setProperty("font-size", "20pt", "important");
+                td.style.lineHeight = "1.45";
+                td.style.whiteSpace = "nowrap";
+                td.style.wordBreak = "normal";
+                td.style.overflowWrap = "normal";
+            });
+
+            return cleanRoot;
+        } catch (error) {
+            console.warn("[AI Prompt Bridge] sanitizeAltWMarkdownRootForOffice v1.71 failed", error);
+            return null;
+        }
+    }
+
+
+    function rebuildAltWPreBlocksForOffice(root) {
+        if (!root) return;
+
+        try {
+            root.querySelectorAll("pre").forEach((pre) => {
+                const text = (pre.innerText || pre.textContent || "").replace(/\n{3,}/g, "\n\n");
+                pre.innerHTML = "";
+
+                const code = document.createElement("code");
+                code.textContent = text;
+
+                code.style.display = "block";
+                code.style.whiteSpace = "pre-wrap";
+                code.style.wordBreak = "break-word";
+                code.style.overflowWrap = "anywhere";
+                code.style.fontFamily = 'Consolas, "Microsoft JhengHei", "Noto Sans TC", monospace';
+                code.style.setProperty("font-size", "20pt", "important");
+                code.style.lineHeight = "1.45";
+                code.style.background = "transparent";
+                code.style.backgroundColor = "transparent";
+                code.style.border = "0";
+                code.style.padding = "0";
+                code.style.margin = "0";
+                code.style.boxShadow = "none";
+
+                pre.appendChild(code);
+
+                // OneNote / Word are more stable with one single pre background and
+                // no nested syntax-highlight spans/backgrounds.
+                pre.style.display = "block";
+                pre.style.whiteSpace = "pre-wrap";
+                pre.style.wordBreak = "break-word";
+                pre.style.overflowWrap = "anywhere";
+                pre.style.fontFamily = 'Consolas, "Microsoft JhengHei", "Noto Sans TC", monospace';
+                pre.style.setProperty("font-size", "20pt", "important");
+                pre.style.lineHeight = "1.45";
+                pre.style.background = "#f3f4f6";
+                pre.style.backgroundColor = "#f3f4f6";
+                pre.style.border = "1px solid #e5e7eb";
+                pre.style.borderRadius = "8pt";
+                pre.style.padding = "10pt 12pt";
+                pre.style.margin = "10pt 0 14pt";
+                pre.style.boxShadow = "none";
+            });
+        } catch (error) {
+            console.warn("[AI Prompt Bridge] rebuildAltWPreBlocksForOffice failed", error);
+        }
+    }
+
+
+    function normalizeAltWMarkdownRootBackgrounds(root) {
+        if (!root) return;
+
+        try {
+            root.style.background = "#ffffff";
+            root.style.backgroundColor = "#ffffff";
+            root.style.boxShadow = "none";
+
+            // First remove all ChatGPT / syntax highlighter backgrounds from every child.
+            // Office can preserve CSS backgrounds even when browser shows transparent.
+            root.querySelectorAll("*").forEach((node) => {
+                if (!node || !node.style) return;
+                if (node.closest?.('[data-ai-prompt-bridge-codeblock="1"]')) return;
+
+                node.style.background = "transparent";
+                node.style.backgroundColor = "transparent";
+                node.style.boxShadow = "none";
+                node.style.textDecoration = node.style.textDecoration || "none";
+                node.removeAttribute?.("bgcolor");
+            });
+
+            // Then rebuild full code blocks as one single gray container.
+            // v1.71: skip when sanitizeAltWMarkdownRootForOffice already converted code
+            // blocks into Office one-cell tables.
+            if (!root.querySelector?.('[data-ai-prompt-bridge-codeblock="1"]')) {
+                rebuildAltWPreBlocksForOffice(root);
+            }
+
+            // Inline code outside pre: monospace only, no fill/highlight.
+            root.querySelectorAll("code").forEach((code) => {
+                if (code.closest?.("pre")) return;
+                code.style.fontFamily = 'Consolas, "Microsoft JhengHei", "Noto Sans TC", monospace';
+                code.style.setProperty("font-size", "20pt", "important");
+                code.style.background = "transparent";
+                code.style.backgroundColor = "transparent";
+                code.style.padding = "0";
+                code.style.border = "0";
+                code.style.boxShadow = "none";
+            });
+
+            root.querySelectorAll("p, div, span, li, ol, ul, blockquote").forEach((node) => {
+                if (!node || !node.style) return;
+                if (node.closest?.("pre")) return;
+                node.style.background = "transparent";
+                node.style.backgroundColor = "transparent";
+                node.style.boxShadow = "none";
+            });
+        } catch (error) {
+            console.warn("[AI Prompt Bridge] normalizeAltWMarkdownRootBackgrounds failed", error);
+        }
+    }
+
+
+    function normalizeAltWMarkdownRootOfficeFont(root) {
+        if (!root) return;
+
+        try {
+            root.style.fontFamily = '"Microsoft JhengHei", "Noto Sans TC", "Segoe UI", Arial, sans-serif';
+            root.style.fontSize = "20pt";
+            root.style.lineHeight = "1.45";
+            root.style.color = "#111827";
+
+            const all = root.querySelectorAll("*");
+            all.forEach((node) => {
+                if (!node || !node.style) return;
+
+                node.style.fontFamily = '"Microsoft JhengHei", "Noto Sans TC", "Segoe UI", Arial, sans-serif';
+                node.style.fontSize = "20pt";
+                node.style.lineHeight = "1.45";
+                node.style.color = node.style.color || "#111827";
+
+                if (/^(H1|H2|H3|H4)$/.test(node.tagName)) {
+                    node.style.fontSize = node.tagName === "H1" ? "24pt" : "22pt";
+                    node.style.fontWeight = "700";
+                    node.style.margin = "14pt 0 8pt";
+                }
+
+                if (node.tagName === "PRE" || node.tagName === "CODE") {
+                    node.style.fontFamily = 'Consolas, "Microsoft JhengHei", "Noto Sans TC", monospace';
+                    node.style.setProperty("font-size", "20pt", "important");
+                    node.style.lineHeight = "1.45";
+                    node.style.whiteSpace = "pre-wrap";
+                }
+
+                if (node.tagName === "P") {
+                    node.style.margin = "0 0 10pt";
+                }
+
+                if (node.tagName === "LI") {
+                    node.style.margin = "0 0 6pt";
+                }
+            });
+
+            root.querySelectorAll("pre").forEach((pre) => {
+                pre.style.background = "#f3f4f6";
+                pre.style.border = "1px solid #e5e7eb";
+                pre.style.borderRadius = "8pt";
+                pre.style.padding = "10pt";
+                pre.style.margin = "8pt 0 12pt";
+                pre.style.whiteSpace = "pre-wrap";
+            });
+
+            root.querySelectorAll("ol, ul").forEach((list) => {
+                list.style.margin = "6pt 0 10pt 24pt";
+                list.style.paddingLeft = "20pt";
+            });
+        } catch (error) {
+            console.warn("[AI Prompt Bridge] normalizeAltWMarkdownRootOfficeFont failed", error);
+        }
+    }
+
+
+    function buildLatestAnswerFromVisibleMarkdownRootForAltW() {
+        const main = getMainConversationRoot();
+        if (!main) return null;
+
+        const composerTop = getComposerTopBoundary();
+        const selectors = [
+            '[class*="MarkdownRoot"]',
+            '.markdown',
+            '.prose',
+            '[data-message-author-role="assistant"] [class*="MarkdownRoot"]',
+            '[data-message-author-role="assistant"] .markdown',
+            '[data-message-author-role="assistant"] .prose'
+        ];
+
+        const candidates = [];
+        const seen = new Set();
+
+        selectors.forEach((selector) => {
+            try {
+                main.querySelectorAll(selector).forEach((element) => {
+                    if (!element || seen.has(element) || !element.getBoundingClientRect) return;
+                    seen.add(element);
+
+                    if (isInsideExportNoise(element)) return;
+                    if (element.closest?.('[data-message-author-role="user"]')) return;
+                    if (element.closest?.('[data-testid*="composer"], textarea, input, [contenteditable="true"], form')) return;
+
+                    const rect = element.getBoundingClientRect();
+                    if (rect.width <= 0 || rect.height <= 0) return;
+
+                    const absoluteTop = rect.top + window.scrollY;
+                    const absoluteBottom = rect.bottom + window.scrollY;
+
+                    // Partial visibility is required. This keeps the currently loaded / active answer
+                    // and excludes old virtualized turns whose root exists but is off-screen.
+                    if (rect.bottom <= 0 || rect.top >= window.innerHeight) return;
+                    if (absoluteTop >= composerTop - 2) return;
+
+                    const text = cleanExportMultiline(element.innerText || element.textContent || "");
+                    if (!text || text.length < 20 || text.length > 12000) return;
+                    if (isBadAltWExportText(text)) return;
+
+                    // Avoid page/session roots. A true answer MarkdownRoot has rich children,
+                    // not multiple assistant toolbars or user turns.
+                    const toolbarCount = Array.from(element.querySelectorAll?.("div") || [])
+                        .filter((node) => isAssistantToolbarElement(node)).length;
+                    if (toolbarCount > 0) return;
+
+                    if (element.querySelector?.('[data-message-author-role="user"]')) return;
+                    if (element.querySelector?.('[data-testid*="composer"], textarea, input, [contenteditable="true"], form')) return;
+
+                    const richCount = element.querySelectorAll?.("p,pre,code,ol,ul,blockquote,table,h1,h2,h3,h4").length || 0;
+                    const codeCount = element.querySelectorAll?.("pre,code,[class*='CodeBlock'],[class*='CodeContent']").length || 0;
+
+                    candidates.push({
+                        element,
+                        text,
+                        top: rect.top,
+                        bottom: rect.bottom,
+                        absoluteTop,
+                        absoluteBottom,
+                        richCount,
+                        codeCount,
+                        score: rect.bottom + Math.min(text.length, 5000) + richCount * 80 + codeCount * 300
+                    });
+                });
+            } catch (error) {
+                console.warn("[AI Prompt Bridge] visible MarkdownRoot selector failed", selector, error);
+            }
+        });
+
+        if (!candidates.length) return null;
+
+        // Prefer the latest visible answer root closest to the composer, not the largest outer container.
+        candidates.sort((a, b) => {
+            if (Math.abs(a.bottom - b.bottom) > 6) return a.bottom - b.bottom;
+            return a.score - b.score;
+        });
+
+        const best = candidates[candidates.length - 1];
+
+        const wrapper = document.createElement("div");
+        wrapper.setAttribute("data-ai-prompt-bridge-altw-markdown-root", "1");
+        wrapper.setAttribute("data-ai-prompt-bridge-markdown-root-chars", String(best.text.length));
+
+        const clone = cleanRichClone(best.element);
+        convertRenderedCodeBlocksToPre(clone);
+        removeToolbarAndNoiseFromClone(clone);
+        removeExportNoiseNodes(clone);
+        absolutizeImageSources(clone);
+        cleanOfficeExportElement(clone);
+        normalizeOfficeLayoutStyles(clone);
+
+        const officeClean = sanitizeAltWMarkdownRootForOffice(clone);
+        wrapper.appendChild(officeClean || clone);
+        normalizeAltWMarkdownRootOfficeFont(wrapper);
+        normalizeAltWMarkdownRootBackgrounds(wrapper);
+
+        const finalText = cleanExportMultiline(wrapper.innerText || wrapper.textContent || "");
+        if (!finalText || finalText.length < 20) return null;
+        if (isBadAltWExportText(finalText)) return null;
+
+        return wrapper;
+    }
+
+
+    function getLatestStructuredAssistantAnswerElement() {
+        try {
+            // v1.71:
+            // DOM-log based primary path.
+            // ChatGPT Project exposes the correct single answer as a visible MarkdownRoot block
+            // (not the huge transcript container and not the visible bottom fragment).
+            const visibleMarkdownRoot = buildLatestAnswerFromVisibleMarkdownRootForAltW();
+            if (visibleMarkdownRoot) return visibleMarkdownRoot;
+
+            // Fallback: guarded full-answer container.
+            const toolbarContainer = buildLatestAnswerFromGuardedToolbarContainer();
+            if (toolbarContainer) return toolbarContainer;
+
+            // Last fallback only: DOM range clone. This can become a partial visible fragment (~465).
+            const rangeClone = buildLatestAnswerFromToolbarRangeClone();
+            if (rangeClone) return rangeClone;
+
+            // Fallback: latest assistant toolbar as bottom anchor + user prompt as top anchor.
+            const toolbarRange = buildLatestAnswerFromToolbarRange();
+            if (toolbarRange) return toolbarRange;
+
+            // Fallback: latest user prompt -> next user/composer.
+            const strictRange = buildLatestAnswerFromStrictRange();
+            if (strictRange) return strictRange;
+
+            // Fallback only: official assistant whole turn.
+            const official = getLatestOfficialAssistantElementWholeTurn();
+            if (official) return official;
+
+            // Last fallback: latest assistant structured block only.
+            if (typeof collectStructuredDomTranscriptBlocks !== "function") return null;
+            const assistantBlocks = collectStructuredDomTranscriptBlocks()
+                .filter((block) => {
+                    if (!block || block.role !== "assistant" || !block.node) return false;
+                    const text = cleanExportMultiline(block.node.innerText || block.node.textContent || block.text || "");
+                    return text && text.length >= 20;
+                });
+
+            if (!assistantBlocks.length) return null;
+
+            const latest = assistantBlocks[assistantBlocks.length - 1];
+            const wrapper = document.createElement("div");
+            wrapper.setAttribute("data-ai-prompt-bridge-altw-structured", "1");
+
+            const clone = latest.node.cloneNode(true);
+            convertRenderedCodeBlocksToPre(clone);
+            absolutizeImageSources(clone);
+            cleanOfficeExportElement(clone);
+            normalizeOfficeLayoutStyles(clone);
+            wrapper.appendChild(clone);
+
+            const text = cleanExportMultiline(wrapper.innerText || wrapper.textContent || "");
+            if (!text || text.length < 20) return null;
+
+            return wrapper;
+        } catch (error) {
+            console.warn("[AI Prompt Bridge] latest assistant extraction failed", error);
+            return null;
+        }
+    }
+
+
     function getLatestAssistantAnswerContainer() {
         const site = getSiteName();
+
+        // v1.71: For ChatGPT, Alt+W should be the latest assistant message block,
+        // not the lowest visible fragment/code block. Reuse Alt+N's structured DOM grouping.
+        if (site === "ChatGPT") {
+            const structured = getLatestStructuredAssistantAnswerElement();
+            if (structured) return structured;
+        }
         const selectorsBySite = {
             ChatGPT: [
                 '[data-message-author-role="assistant"]',
                 '[data-testid*="assistant"]',
-                '.markdown',
-                '.prose'
+                '[data-testid*="conversation-turn"]',
+                "article",
+                ".markdown",
+                ".prose",
+                "pre",
+                "p"
             ],
             Gemini: [
                 "model-response",
@@ -1394,11 +3189,20 @@
                 document.querySelectorAll(selector).forEach((element) => {
                     if (seen.has(element)) return;
                     seen.add(element);
+                    if (!isVisibleElement(element) || isBridgeOrNonContentElement(element)) return;
 
-                    const score = scoreLatestAssistantCandidate(element);
+                    const turn = findAssistantTurnContainerFromChild(element);
+                    const root = getBestAssistantContentRoot(turn || element) || element;
+                    const score = scoreLatestAssistantCandidate(root);
                     if (score < 0) return;
 
-                    candidates.push({ element, score });
+                    const text = cleanExportMultiline(root.innerText || root.textContent || "");
+                    candidates.push({
+                        element: root,
+                        score,
+                        textLength: text.length,
+                        bottom: (turn || element).getBoundingClientRect?.().bottom || 0
+                    });
                 });
             } catch (error) {
                 console.warn("[AI Prompt Bridge] latest assistant selector failed", selector, error);
@@ -1407,403 +3211,66 @@
 
         if (candidates.length === 0) return null;
 
-        candidates.sort((a, b) => a.score - b.score);
-        return candidates[candidates.length - 1].element;
+        candidates.sort((a, b) => (a.score + a.bottom + Math.min(a.textLength, 20000)) - (b.score + b.bottom + Math.min(b.textLength, 20000)));
+        let chosen = candidates[candidates.length - 1].element;
+
+        if (isTooSmallLatestAnswerElement(chosen)) {
+            const parentTurn = findAssistantTurnContainerFromChild(chosen);
+            const betterRoot = getBestAssistantContentRoot(parentTurn);
+            if (betterRoot) chosen = betterRoot;
+        }
+
+        return chosen;
     }
+
 
     function buildFullSingleAnswerElement(container) {
         if (!container) return null;
 
-        const contentRoot = getPrimaryContentRoot(container);
-        const clone = cleanRichClone(contentRoot);
-        absolutizeImageSources(clone);
+        let source = container;
 
-        const text = cleanExportText(clone.innerText || clone.textContent || "");
+        if (
+            source.getAttribute?.("data-ai-prompt-bridge-altw-structured") === "1" ||
+            source.getAttribute?.("data-ai-prompt-bridge-altw-toolbar-range") === "1" ||
+            source.getAttribute?.("data-ai-prompt-bridge-altw-container") === "1" ||
+            source.getAttribute?.("data-ai-prompt-bridge-altw-range-clone") === "1" ||
+            source.getAttribute?.("data-ai-prompt-bridge-altw-visible-range") === "1" ||
+            source.getAttribute?.("data-ai-prompt-bridge-altw-markdown-root") === "1"
+        ) {
+            const clone = cleanRichClone(source);
+            removeLeadingUserPromptFromAltW(clone);
+            removeExportNoiseNodes(clone);
+            absolutizeImageSources(clone);
+            cleanOfficeExportElement(clone);
+            normalizeOfficeLayoutStyles(clone);
+
+            const text = cleanExportMultiline(clone.innerText || clone.textContent || "");
+            const hasImage = Boolean(clone.querySelector?.("img"));
+            if (text.length < 2 && !hasImage) return null;
+
+            clone.setAttribute("data-ai-prompt-bridge-single-answer", "1");
+            return clone;
+        }
+
+        if (isTooSmallLatestAnswerElement(source)) {
+            const turn = findAssistantTurnContainerFromChild(source);
+            const root = getBestAssistantContentRoot(turn);
+            if (root) source = root;
+        }
+
+        const contentRoot = getPrimaryContentRoot(source);
+        const clone = cleanRichClone(contentRoot);
+        removeLeadingUserPromptFromAltW(clone);
+        removeExportNoiseNodes(clone);
+        absolutizeImageSources(clone);
+        cleanOfficeExportElement(clone);
+
+        const text = cleanExportMultiline(clone.innerText || clone.textContent || "");
         const hasImage = Boolean(clone.querySelector?.("img"));
         if (text.length < 2 && !hasImage) return null;
 
-        // Do not add any artificial heading such as "Visible AI Answer".
         clone.setAttribute("data-ai-prompt-bridge-single-answer", "1");
         return clone;
-    }
-
-
-    function isInsideComposerOrChrome(element) {
-        if (!element || !element.closest) return true;
-        return Boolean(
-            element.closest(`#${PANEL_ID}`) ||
-            element.closest(`#${BUBBLE_ID}`) ||
-            element.closest("#ai-prompt-bridge-startup-probe") ||
-            element.closest("textarea,input,select,form,nav,aside,header,footer,[contenteditable='true']") ||
-            element.closest('[data-testid*="composer"]') ||
-            element.closest('[aria-label*="Message"]') ||
-            element.closest('[aria-label*="訊息"]')
-        );
-    }
-
-    function isUsefulAnswerLine(line) {
-        const text = cleanExportText(line);
-        if (!text) return false;
-        if (text.length < 2) return false;
-
-        const noise = new Set([
-            "複製",
-            "編輯",
-            "分享",
-            "更多",
-            "資料來源",
-            "純文字",
-            "ChatGPT 說",
-            "ChatGPT說",
-            "AI Answer",
-            "Visible AI Answer",
-            "ChatGPT 可能會出錯。請查證重要資訊。"
-        ]);
-
-        if (noise.has(text)) return false;
-        if (/^(copy|copied|edit|share|more|regenerate|read aloud)$/i.test(text)) return false;
-        if (/^Alt\+[A-Za-z]/.test(text)) return false;
-        if (/^https?:\/\//.test(text) && text.length < 120) return false;
-        return true;
-    }
-
-    function getReadableTextElements(root) {
-        if (!root) return [];
-        const selectors = [
-            "h1", "h2", "h3", "h4",
-            "p", "li", "blockquote",
-            "table", "pre"
-        ];
-
-        const out = [];
-        const seen = new Set();
-
-        selectors.forEach((selector) => {
-            try {
-                root.querySelectorAll(selector).forEach((element) => {
-                    if (seen.has(element)) return;
-                    seen.add(element);
-
-                    if (!isVisibleElement(element)) return;
-                    if (isInsideComposerOrChrome(element)) return;
-                    if (element.closest("button,svg")) return;
-
-                    const raw = element.innerText || element.textContent || "";
-                    const text = cleanExportText(raw);
-                    if (!isUsefulAnswerLine(text)) return;
-
-                    const rect = element.getBoundingClientRect();
-                    if (rect.width <= 0 || rect.height <= 0) return;
-
-                    out.push({
-                        element,
-                        text,
-                        top: rect.top,
-                        bottom: rect.bottom,
-                        left: rect.left,
-                        right: rect.right
-                    });
-                });
-            } catch (error) {
-                console.warn("[AI Prompt Bridge] readable selector failed", selector, error);
-            }
-        });
-
-        out.sort((a, b) => a.top - b.top || a.left - b.left);
-        return out;
-    }
-
-    function commonAncestor(a, b) {
-        if (!a) return b || null;
-        if (!b) return a || null;
-        const parents = new Set();
-        let node = a;
-        while (node) {
-            parents.add(node);
-            node = node.parentElement;
-        }
-        node = b;
-        while (node) {
-            if (parents.has(node)) return node;
-            node = node.parentElement;
-        }
-        return null;
-    }
-
-    function buildElementFromLines(lines) {
-        const wrapper = document.createElement("div");
-        wrapper.setAttribute("data-ai-prompt-bridge-single-answer", "1");
-        wrapper.setAttribute("data-ai-prompt-bridge-fallback", "text-lines");
-
-        lines.forEach((line) => {
-            const text = cleanExportText(line);
-            if (!isUsefulAnswerLine(text)) return;
-            const p = document.createElement("p");
-            p.textContent = text;
-            wrapper.appendChild(p);
-        });
-
-        return wrapper.childNodes.length ? wrapper : null;
-    }
-
-    function getLatestAnswerByReadableBlocks() {
-        const main = document.querySelector("main") || document.querySelector('[role="main"]');
-        if (!main) return null;
-
-        const blocks = getReadableTextElements(main);
-        if (!blocks.length) return null;
-
-        const viewportBottom = window.innerHeight;
-        const composerTopCandidates = Array.from(document.querySelectorAll("textarea,[contenteditable='true'],form,[data-testid*='composer']"))
-            .map((el) => el.getBoundingClientRect?.())
-            .filter((rect) => rect && rect.top > 0)
-            .map((rect) => rect.top);
-        const composerTop = composerTopCandidates.length ? Math.min(...composerTopCandidates) : viewportBottom;
-
-        // Prefer blocks above composer and closest to it, which are usually the latest assistant answer.
-        const visibleAnswerBlocks = blocks.filter((b) => b.bottom > 0 && b.top < composerTop - 10);
-        const pool = visibleAnswerBlocks.length ? visibleAnswerBlocks : blocks;
-
-        const anchor = pool[pool.length - 1];
-        if (!anchor) return null;
-
-        // Expand upward within the same visual answer area until a large vertical gap.
-        const selected = [anchor];
-        let lastTop = anchor.top;
-
-        for (let i = pool.length - 2; i >= 0; i -= 1) {
-            const current = pool[i];
-            const gap = lastTop - current.bottom;
-
-            // Stop at large gaps because they usually separate previous answer / cards / images.
-            if (gap > 180 && selected.length > 0) break;
-
-            // Stop before clearly older block far above viewport midline when we already have enough text.
-            if (current.bottom < 0 && selected.length > 0) break;
-
-            selected.unshift(current);
-            lastTop = current.top;
-
-            const chars = selected.reduce((sum, item) => sum + item.text.length, 0);
-            if (chars > 12000) break;
-        }
-
-        // Try to find a common ancestor, but if it looks too broad, use clean text lines instead.
-        let ancestor = null;
-        selected.forEach((item) => {
-            ancestor = commonAncestor(ancestor, item.element);
-        });
-
-        if (ancestor && ancestor !== document.body && ancestor !== document.documentElement && !ancestor.matches?.("main,[role='main']")) {
-            const roles = ancestor.querySelectorAll?.("[data-message-author-role]") || [];
-            const text = cleanExportText(ancestor.innerText || ancestor.textContent || "");
-            if (roles.length <= 1 && text.length <= 60000 && text.length >= 10) {
-                const root = getPrimaryContentRoot(ancestor);
-                const clone = cleanRichClone(root);
-                clone.setAttribute("data-ai-prompt-bridge-single-answer", "1");
-                clone.setAttribute("data-ai-prompt-bridge-fallback", "readable-ancestor");
-                return clone;
-            }
-        }
-
-        return buildElementFromLines(selected.map((item) => item.text));
-    }
-
-
-    function getCurrentVisibleAssistantContainer() {
-        const site = getSiteName();
-        const selectorsBySite = {
-            ChatGPT: [
-                '[data-message-author-role="assistant"]',
-                '[data-testid*="assistant"]',
-                '.markdown',
-                '.prose'
-            ],
-            Gemini: [
-                "model-response",
-                "message-content",
-                ".message-content",
-                "render-viewer",
-                "[data-response-index]"
-            ],
-            Claude: [
-                '[data-testid*="assistant-message"]',
-                '[data-testid*="message"]',
-                ".font-claude-message",
-                ".prose"
-            ],
-            DeepSeek: [
-                ".ds-markdown",
-                ".markdown",
-                ".prose",
-                "[class*='message']"
-            ],
-            Perplexity: [
-                "article",
-                ".prose",
-                "[class*='answer']"
-            ]
-        };
-
-        const selectors = selectorsBySite[site] || [
-            '[data-message-author-role="assistant"]',
-            ".markdown",
-            ".prose",
-            "article"
-        ];
-
-        const candidates = [];
-        const seen = new Set();
-
-        selectors.forEach((selector) => {
-            try {
-                document.querySelectorAll(selector).forEach((element) => {
-                    if (seen.has(element)) return;
-                    seen.add(element);
-
-                    if (!isVisibleElement(element) || isBridgeOrNonContentElement(element)) return;
-                    if (element === document.body || element === document.documentElement) return;
-                    if (element.matches?.("main,[role='main']")) return;
-
-                    const nestedRoles = element.querySelectorAll?.("[data-message-author-role]") || [];
-                    if (nestedRoles.length > 1) return;
-
-                    const text = normalizeText(element.innerText || element.textContent || "");
-                    const hasImage = Boolean(element.querySelector?.("img"));
-                    if (text.length < 10 && !hasImage) return;
-                    if (text.length > 12000) return;
-
-                    const rect = element.getBoundingClientRect();
-                    const ratio = getVisibleRatio(element);
-                    if (ratio <= 0) return;
-
-                    candidates.push({
-                        element,
-                        textLength: text.length,
-                        top: rect.top,
-                        bottom: rect.bottom,
-                        ratio,
-                        hasRole: element.matches?.('[data-message-author-role="assistant"]') ? 1 : 0,
-                        hasMarkdown: element.querySelector?.(".markdown,.prose") ? 1 : 0
-                    });
-                });
-            } catch (error) {
-                console.warn("[AI Prompt Bridge] current visible assistant selector failed", selector, error);
-            }
-        });
-
-        if (candidates.length === 0) return null;
-
-        // The current answer is usually the visible assistant container closest to the composer/bottom.
-        // This avoids copying older visible snippets above the current answer.
-        candidates.sort((a, b) => {
-            const scoreA =
-                a.hasRole * 100000 +
-                a.hasMarkdown * 5000 +
-                Math.min(a.bottom, window.innerHeight) * 10 +
-                a.ratio * 1000 -
-                (a.textLength > 8000 ? 20000 : 0);
-            const scoreB =
-                b.hasRole * 100000 +
-                b.hasMarkdown * 5000 +
-                Math.min(b.bottom, window.innerHeight) * 10 +
-                b.ratio * 1000 -
-                (b.textLength > 8000 ? 20000 : 0);
-            return scoreA - scoreB;
-        });
-
-        return candidates[candidates.length - 1].element;
-    }
-
-    function buildVisibleTextSegmentFromContainer(container) {
-        if (!container) return null;
-
-        const contentRoot = getPrimaryContentRoot(container);
-        const selectors = [
-            "h1",
-            "h2",
-            "h3",
-            "h4",
-            "p",
-            "li",
-            "blockquote",
-            "table"
-        ];
-
-        const blocks = [];
-        const seen = new Set();
-
-        selectors.forEach((selector) => {
-            try {
-                contentRoot.querySelectorAll(selector).forEach((element) => {
-                    if (seen.has(element)) return;
-                    seen.add(element);
-
-                    if (!isVisibleElement(element) || isBridgeOrNonContentElement(element)) return;
-                    if (element.closest("textarea,input,select,form,nav,aside,header,footer")) return;
-                    if (element.closest("pre,code")) return;
-
-                    let text = cleanExportText(element.innerText || element.textContent || "");
-                    if (isNoisyAutoCopyBlockText(text)) return;
-                    if (text.length < 2 || text.length > 5000) return;
-
-                    const rect = element.getBoundingClientRect();
-                    if (rect.bottom < 0 || rect.top > window.innerHeight) return;
-
-                    blocks.push({
-                        text,
-                        tag: element.tagName ? element.tagName.toLowerCase() : "p",
-                        top: rect.top,
-                        bottom: rect.bottom
-                    });
-                });
-            } catch (error) {
-                console.warn("[AI Prompt Bridge] visible segment selector failed", selector, error);
-            }
-        });
-
-        if (blocks.length === 0) {
-            const text = cleanExportText(contentRoot.innerText || contentRoot.textContent || "");
-            if (!text || text.length < 10 || text.length > 8000) return null;
-            const wrapper = document.createElement("div");
-            wrapper.setAttribute("data-ai-prompt-bridge-fallback", "visible-current-answer");
-            const p = document.createElement("p");
-            p.textContent = text;
-            wrapper.appendChild(p);
-            return wrapper;
-        }
-
-        blocks.sort((a, b) => a.top - b.top);
-
-        // Start from the first actually visible meaningful block in the current assistant answer.
-        // This prevents copying the code block label "純文字", "ChatGPT 說", and older upper snippets.
-        const firstIndex = blocks.findIndex((block) => {
-            const t = cleanExportText(block.text);
-            return t.length >= 6 && !isNoisyAutoCopyBlockText(t);
-        });
-
-        const chosen = blocks.slice(firstIndex >= 0 ? firstIndex : 0);
-        let total = 0;
-        const limited = [];
-        chosen.forEach((block) => {
-            if (total > 7000) return;
-            limited.push(block);
-            total += block.text.length;
-        });
-
-        if (limited.length === 0) return null;
-
-        const wrapper = document.createElement("div");
-        wrapper.setAttribute("data-ai-prompt-bridge-fallback", "visible-current-answer");
-
-        limited.forEach((block) => {
-            let tag = ["h1", "h2", "h3", "h4", "blockquote"].includes(block.tag) ? block.tag : "p";
-            const el = document.createElement(tag);
-            el.textContent = cleanExportText(block.text);
-            if (el.textContent) wrapper.appendChild(el);
-        });
-
-        return wrapper.childNodes.length ? wrapper : null;
     }
 
     function getAltWRichCopyTarget() {
@@ -2154,9 +3621,17 @@
             node.style.whiteSpace = "pre-wrap";
             node.style.wordBreak = "break-word";
             node.style.overflowWrap = "anywhere";
-            node.style.fontFamily = "Consolas, 'Cascadia Mono', monospace";
-            node.style.fontSize = "18pt";
+            node.style.fontFamily = "Consolas, 'Cascadia Mono', 'Courier New', monospace";
+            node.style.fontSize = "20pt";
             node.style.lineHeight = "1.45";
+            if (node.tagName === "PRE") {
+                node.style.display = "block";
+                node.style.backgroundColor = "#f8fafc";
+                node.style.border = "1px solid #e5e7eb";
+                node.style.borderRadius = "6px";
+                node.style.padding = "10px 12px";
+                node.style.margin = "10px 0";
+            }
         });
 
         root.querySelectorAll("table").forEach((node) => {
@@ -2447,7 +3922,7 @@
             return blocks;
         }
 
-        // v1.34: Newer ChatGPT layouts may not expose stable data-message-author-role.
+        // v1.71: Newer ChatGPT layouts may not expose stable data-message-author-role.
         // Use rich DOM message candidates before falling back to plain text.
         const domCandidates = collectDomMessageCandidates();
         if (domCandidates.length >= 1) {
@@ -2991,11 +4466,13 @@
         };
 
         elements.forEach((item, index) => {
-            const gap = lastTop === null ? 0 : item.top - lastTop;
             const roleChanged = current && current.role !== item.role;
 
-            // User bubble is always its own turn. Assistant items are grouped until a user bubble or large gap.
-            if (!current || roleChanged || (item.role === "user") || (gap > 260 && current.items.length > 0)) {
+            // v1.71:
+            // Do not split assistant answers by visual gap. ChatGPT answers often contain
+            // code blocks, paragraphs, and explanations separated by large vertical spacing.
+            // Splitting by gap caused Alt+W to copy only the last 118 chars.
+            if (!current || roleChanged || item.role === "user") {
                 flush();
                 current = {
                     role: item.role,
@@ -3031,7 +4508,7 @@
             "font-family:'Microsoft JhengHei','Segoe UI',Arial,sans-serif;font-size:20pt;line-height:1.55;color:#111111;max-width:980px;white-space:normal;word-break:break-word;overflow-wrap:anywhere;"
         );
 
-        // v1.34:
+        // v1.71:
         // Alt+N must behave like "Alt+W for every loaded message".
         // 1) Official role DOM if available.
         // 2) Structured DOM blocks preserving p/ol/ul/blockquote/table/pre if role DOM is unavailable.
@@ -3129,7 +4606,7 @@
             console.warn("[AI Prompt Bridge] full-session export captured only one message. The page may not have loaded older messages yet.");
         }
 
-        // v1.34: Do not add AI Session Export / Source / URL metadata to OneNote/Word.
+        // v1.71: Do not add AI Session Export / Source / URL metadata to OneNote/Word.
         // The user wants clean content only.
         const htmlContent = normalizeRichHtml(transcript.innerHTML);
         const plainText = textContent;
@@ -3229,8 +4706,299 @@
         return clone;
     }
 
+    function extractRenderedCodeTextWithBreaks(root) {
+        const blockTags = new Set([
+            "DIV", "P", "LI", "TR", "SECTION", "ARTICLE", "HEADER", "FOOTER",
+            "PRE", "CODE"
+        ]);
+
+        const lines = [];
+        let current = "";
+
+        const pushCurrent = () => {
+            const line = current.replace(/\s+$/g, "");
+            if (line.trim()) lines.push(line);
+            current = "";
+        };
+
+        const walk = (node) => {
+            if (!node) return;
+
+            if (node.nodeType === Node.TEXT_NODE) {
+                current += node.nodeValue || "";
+                return;
+            }
+
+            if (node.nodeType !== Node.ELEMENT_NODE) return;
+
+            const tag = node.tagName;
+            if (tag === "BR") {
+                pushCurrent();
+                return;
+            }
+
+            if (node.matches?.("button,svg")) {
+                return;
+            }
+
+            const beforeLine = blockTags.has(tag) && current.trim();
+            if (beforeLine) pushCurrent();
+
+            Array.from(node.childNodes || []).forEach(walk);
+
+            if (blockTags.has(tag)) {
+                pushCurrent();
+            }
+        };
+
+        walk(root);
+
+        const joined = lines.join("\n").trim();
+        return joined || safeText(root?.innerText || root?.textContent || "");
+    }
+
+    function isExportNoiseText(text) {
+        const t = cleanExportMultiline(text || "").trim();
+        if (!t) return true;
+
+        const exactNoise = new Set([
+            "新增至專案來源",
+            "回應",
+            "回應欠佳",
+            "複製",
+            "編輯",
+            "分享",
+            "朗讀",
+            "重新產生",
+            "重試",
+            "資料來源",
+            "ChatGPT 可能會出錯。請查證重要資訊。",
+            "檢視版本",
+            "另外"
+        ]);
+
+        if (exactNoise.has(t)) return true;
+
+        return (
+            /^今天\s*(上午|下午)?\s*\d{1,2}:\d{2}$/.test(t) ||
+            /^昨天\s*(上午|下午)?\s*\d{1,2}:\d{2}$/.test(t) ||
+            /^\d{4}年\d{1,2}月\d{1,2}日/.test(t) ||
+            /^已思考\s*\d+\s*秒/.test(t) ||
+            /^處理時間為\s*\d+s?$/.test(t) ||
+            /^第\s*\d+\s*版$/.test(t)
+        );
+    }
+
+    function removeExportNoiseNodes(root) {
+        try {
+            if (!root || !root.querySelectorAll) return root;
+
+            const selectors = [
+                "button",
+                "[role='button']",
+                "svg",
+                "[aria-label*='複製']",
+                "[aria-label*='Copy']",
+                "[aria-label*='回應']",
+                "[aria-label*='thumb']",
+                "[data-testid*='copy']",
+                "[data-testid*='composer']",
+                "textarea",
+                "input",
+                "form"
+            ].join(",");
+
+            root.querySelectorAll(selectors).forEach((node) => node.remove());
+
+            Array.from(root.querySelectorAll("p,div,span,small")).forEach((node) => {
+                if (!node || !node.parentElement) return;
+                if (node.querySelector?.("p,li,ol,ul,blockquote,table,pre,code,img")) return;
+
+                const t = cleanExportMultiline(node.innerText || node.textContent || "");
+                if (isExportNoiseText(t)) node.remove();
+            });
+
+            const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+            const textNodes = [];
+            while (walker.nextNode()) textNodes.push(walker.currentNode);
+
+            textNodes.forEach((node) => {
+                const t = cleanExportMultiline(node.nodeValue || "");
+                if (isExportNoiseText(t)) {
+                    node.nodeValue = "";
+                }
+            });
+        } catch (error) {
+            console.warn("[AI Prompt Bridge] remove export noise failed", error);
+        }
+
+        return root;
+    }
+
+    function removeLeadingUserPromptFromAltW(root) {
+        try {
+            if (!root || !root.querySelectorAll) return root;
+
+            const children = Array.from(root.children || []);
+            for (const child of children.slice(0, 8)) {
+                const t = cleanExportMultiline(child.innerText || child.textContent || "");
+                if (!t) {
+                    child.remove();
+                    continue;
+                }
+
+                if (
+                    isExportNoiseText(t) ||
+                    child.matches?.('[data-message-author-role="user"]') ||
+                    child.closest?.('[data-message-author-role="user"]') ||
+                    (
+                        t.length < 200 &&
+                        !child.querySelector?.("pre,code,table,ul,ol,blockquote") &&
+                        (
+                            /coomer\s*是怎/i.test(t) ||
+                            /怎讀取非訂閱內容/.test(t) ||
+                            /檢視版本/.test(t)
+                        )
+                    )
+                ) {
+                    child.remove();
+                } else {
+                    break;
+                }
+            }
+        } catch (error) {
+            console.warn("[AI Prompt Bridge] remove leading user prompt failed", error);
+        }
+
+        return root;
+    }
+
+
+    function normalizeExportCodeText(rawText) {
+        let normalized = safeText(rawText)
+            .replace(/\r\n/g, "\n")
+            .replace(/\u00a0/g, " ")
+            .replace(/[ \t]*↓[ \t]*/g, "\n↓\n")
+            .replace(/[ \t]*→[ \t]*/g, "\n→\n");
+
+        const lines = normalized
+            .split("\n")
+            .map((line) => line.trimEnd())
+            .filter((line) => {
+                const trimmed = line.trim();
+                if (!trimmed) return false;
+                if (/^(純文字|plaintext|text|bash|powershell|python|javascript|json|yaml|markdown)$/i.test(trimmed)) return false;
+                if (/^(複製|copy|copied|已複製|編輯|edit|檢視版本|新增至專案來源|回應|回應欠佳|另外)$/i.test(trimmed)) return false;
+                return true;
+            });
+
+        return lines.join("\n").trim();
+    }
+
+    function looksLikeRenderedCodeBlock(element) {
+        if (!element || !element.querySelectorAll) return false;
+
+        const text = safeText(element.innerText || element.textContent || "");
+        if (!text || text.length < 12) return false;
+
+        const lower = text.toLowerCase();
+        const hasLanguageLabel =
+            /(^|\n|\s)(純文字|plaintext|text|bash|powershell|python|javascript|json|yaml|markdown)(\s|\n|$)/i.test(text);
+
+        const hasCodeSignals =
+            text.includes("↓") ||
+            text.includes("→") ||
+            text.includes("=>") ||
+            text.includes("->") ||
+            text.includes("git ") ||
+            text.includes("python ") ||
+            text.includes("sqlite") ||
+            text.includes("import ") ||
+            text.includes("function ") ||
+            text.includes("{") ||
+            text.includes("}") ||
+            text.split("\n").length >= 4;
+
+        const hasCopyButton = Boolean(
+            element.querySelector("button,svg,[aria-label*='Copy'],[aria-label*='複製'],[data-testid*='copy']")
+        );
+
+        const manyArrowLines = (text.match(/↓/g) || []).length >= 2 || (text.match(/→/g) || []).length >= 2;
+        return (hasLanguageLabel && (hasCodeSignals || hasCopyButton)) || (hasCopyButton && manyArrowLines);
+    }
+
+    function convertRenderedCodeBlocksToPre(root) {
+        try {
+            if (!root || !root.querySelectorAll) return root;
+
+            const candidates = Array.from(root.querySelectorAll("div"))
+                .filter((node) => looksLikeRenderedCodeBlock(node))
+                .sort((a, b) => {
+                    // Convert smaller/nested blocks first; skip parents that contain converted children.
+                    const aDepth = getElementDepth(a);
+                    const bDepth = getElementDepth(b);
+                    return bDepth - aDepth;
+                });
+
+            const converted = new Set();
+
+            candidates.forEach((node) => {
+                if (Array.from(converted).some((child) => node.contains(child))) return;
+
+                const codeText = normalizeExportCodeText(extractRenderedCodeTextWithBreaks(node));
+                if (!codeText || codeText.length < 8) return;
+
+                const pre = document.createElement("pre");
+                const code = document.createElement("code");
+                code.textContent = codeText;
+
+                pre.setAttribute("data-ai-prompt-bridge-codeblock", "1");
+                pre.setAttribute(
+                    "style",
+                    [
+                        "white-space:pre-wrap",
+                        "font-family:Consolas,'Cascadia Mono','Courier New',monospace",
+                        "font-size:20pt",
+                        "line-height:1.45",
+                        "background:#f8fafc",
+                        "border:1px solid #e5e7eb",
+                        "border-radius:6px",
+                        "padding:10px 12px",
+                        "margin:10px 0",
+                        "color:#111111"
+                    ].join(";")
+                );
+                code.setAttribute(
+                    "style",
+                    "white-space:pre-wrap;font-family:Consolas,'Cascadia Mono','Courier New',monospace;font-size:20pt;line-height:1.45;background:transparent;color:#111111;"
+                );
+
+                pre.appendChild(code);
+                node.replaceWith(pre);
+                converted.add(pre);
+            });
+        } catch (error) {
+            console.warn("[AI Prompt Bridge] convert rendered code blocks failed", error);
+        }
+
+        return root;
+    }
+
+    function getElementDepth(element) {
+        let depth = 0;
+        let node = element;
+        while (node && node.parentElement) {
+            depth += 1;
+            node = node.parentElement;
+        }
+        return depth;
+    }
+
+
     function cleanRichClone(inputElement) {
         const clone = inputElement.cloneNode(true);
+        convertRenderedCodeBlocksToPre(clone);
+        removeExportNoiseNodes(clone);
         preserveMeaningfulButtons(clone);
 
         const removeSelectors = [
@@ -3265,7 +5033,12 @@
             el.removeAttribute("role");
 
             // Keep styles that are added by AI Prompt Bridge itself for images / preserved blocks.
-            if (!el.hasAttribute("data-ai-prompt-bridge-preserved-button") && el.tagName !== "IMG") {
+            if (
+                !el.hasAttribute("data-ai-prompt-bridge-preserved-button") &&
+                !el.hasAttribute("data-ai-prompt-bridge-codeblock") &&
+                !el.closest?.("[data-ai-prompt-bridge-codeblock]") &&
+                el.tagName !== "IMG"
+            ) {
                 el.removeAttribute("style");
             }
 
@@ -3306,6 +5079,7 @@
 
             // Body text gets enlarged for OneNote readability.
             root.querySelectorAll("p, li, td, th, div, span").forEach((el) => {
+                if (el.closest?.("pre,[data-ai-prompt-bridge-codeblock]")) return;
                 el.style.fontSize = "20pt";
                 el.style.lineHeight = "1.6";
                 el.style.color = "#111111";
@@ -3322,9 +5096,20 @@
             });
 
             // Code remains smaller than body text for readability and layout.
-            root.querySelectorAll("pre, code").forEach((el) => {
-                el.style.fontSize = "16pt";
+            root.querySelectorAll("pre, code, pre *, code *").forEach((el) => {
+                el.style.whiteSpace = "pre-wrap";
+                el.style.wordBreak = "break-word";
+                el.style.overflowWrap = "anywhere";
+                el.style.fontFamily = "Consolas,'Cascadia Mono','Courier New','Microsoft JhengHei','Noto Sans TC',monospace";
+                el.style.setProperty("font-size", "20pt", "important");
                 el.style.lineHeight = "1.45";
+                if (el.tagName === "PRE") {
+                    el.style.backgroundColor = "#f8fafc";
+                    el.style.border = "1px solid #e5e7eb";
+                    el.style.borderRadius = "6px";
+                    el.style.padding = "10px 12px";
+                    el.style.margin = "10px 0";
+                }
             });
 
             root.querySelectorAll("table").forEach((el) => {
@@ -3355,7 +5140,7 @@
 body,
 .ai-prompt-bridge-onenote-export {
   font-family: "Microsoft JhengHei", "Segoe UI", Calibri, "Noto Sans TC", Arial, sans-serif;
-  font-size: 20pt;
+  font-size: 20pt !important;
   color: #111111;
   background: #ffffff;
   line-height: 1.6;
@@ -3366,8 +5151,17 @@ body,
 .ai-prompt-bridge-onenote-export th,
 .ai-prompt-bridge-onenote-export div,
 .ai-prompt-bridge-onenote-export span {
-  font-size: 20pt;
+  font-size: 20pt !important;
   line-height: 1.6;
+  background: transparent;
+}
+.ai-prompt-bridge-onenote-export pre,
+.ai-prompt-bridge-onenote-export pre *,
+.ai-prompt-bridge-onenote-export code {
+  white-space: pre-wrap;
+  font-family: Consolas, "Cascadia Mono", "Courier New", monospace;
+  font-size: 20pt !important;
+  line-height: 1.45;
 }
 .ai-prompt-bridge-onenote-export h1,
 .ai-prompt-bridge-onenote-export h2,
@@ -3406,23 +5200,65 @@ body,
   background: #f3f4f6;
   font-weight: 700;
 }
+.ai-prompt-bridge-onenote-export [data-ai-prompt-bridge-codeblock="1"],
+.ai-prompt-bridge-onenote-export [data-ai-prompt-bridge-codeblock="1"] * {
+  font-family: Consolas, "Microsoft JhengHei", "Noto Sans TC", monospace;
+  font-size: 20pt !important;
+  line-height: 1.45;
+}
+.ai-prompt-bridge-onenote-export [data-ai-prompt-bridge-codeblock="1"] {
+  background: #f3f4f6 !important;
+  background-color: #f3f4f6 !important;
+  border: 0 !important;
+  border-color: transparent !important;
+  border-radius: 8pt;
+  border-collapse: collapse;
+  border-spacing: 0;
+  margin: 8pt 0 12pt;
+  box-shadow: none !important;
+  mso-border-alt: none;
+  mso-table-lspace: 0pt;
+  mso-table-rspace: 0pt;
+}
+.ai-prompt-bridge-onenote-export [data-ai-prompt-bridge-codeblock-line="1"] {
+  border: 0 !important;
+  border-color: transparent !important;
+  mso-border-alt: none;
+}
+.ai-prompt-bridge-onenote-export [data-ai-prompt-bridge-codeblock-cell="1"] {
+  background: #f3f4f6 !important;
+  background-color: #f3f4f6 !important;
+  border: 0 !important;
+  border-top: 0 !important;
+  border-bottom: 0 !important;
+  border-left: 0 !important;
+  border-right: 0 !important;
+  border-color: transparent !important;
+  white-space: nowrap !important;
+  word-break: normal !important;
+  overflow-wrap: normal !important;
+  box-shadow: none !important;
+  mso-border-alt: none;
+}
 .ai-prompt-bridge-onenote-export pre {
   white-space: pre-wrap;
   background: #f8fafc;
   border: 1px solid #e5e7eb;
   padding: 10px;
   border-radius: 6px;
-  font-size: 16pt;
+  font-size: 20pt !important;
   line-height: 1.45;
 }
 .ai-prompt-bridge-onenote-export code {
   font-family: Consolas, "Courier New", monospace;
-  background: #f3f4f6;
-  padding: 1px 4px;
-  font-size: 16pt;
+  background: transparent !important;
+  background-color: transparent !important;
+  padding: 0;
+  font-size: 20pt !important;
+  box-shadow: none !important;
 }
 .ai-prompt-bridge-onenote-export pre code {
-  font-size: 16pt;
+  font-size: 20pt !important;
   background: transparent;
   padding: 0;
 }
@@ -3470,7 +5306,34 @@ ${body}
             return;
         }
 
+        if (target.source !== "selection" && isBadAltWExportText(textContent)) {
+            alert("Alt+W 偵測到候選內容像舊 session / composer 草稿，已停止複製，避免覆蓋剪貼簿。請先點一下目前回答區塊或手動框選後再按 Alt+W。完整 session 請用 Alt+N。");
+            return;
+        }
+
+        if (target.element?.getAttribute?.("data-ai-prompt-bridge-altw-markdown-root") === "1") {
+            const cleanOfficeClone = sanitizeAltWMarkdownRootForOffice(clone);
+            if (cleanOfficeClone) {
+                clone.innerHTML = "";
+                Array.from(cleanOfficeClone.childNodes).forEach((node) => clone.appendChild(node.cloneNode(true)));
+            }
+            normalizeAltWMarkdownRootOfficeFont(clone);
+            normalizeAltWMarkdownRootBackgrounds(clone);
+        }
+
         applyOneNoteInlineStyles(clone);
+
+        // v1.71 final pass: keep all text 20pt and remove gray highlight leakage from
+        // normal MarkdownRoot paragraphs, while preserving real pre/code blocks.
+        if (target.element?.getAttribute?.("data-ai-prompt-bridge-altw-markdown-root") === "1") {
+            clone.querySelectorAll("*").forEach((node) => {
+                if (!node || !node.style) return;
+                node.style.setProperty("font-size", "20pt", "important");
+                node.style.lineHeight = (node.tagName === "PRE" || node.tagName === "CODE") ? "1.45" : "1.6";
+            });
+            normalizeAltWMarkdownRootBackgrounds(clone);
+        }
+
         const htmlContent = normalizeRichHtml(clone.innerHTML || `<pre>${escapeHtml(textContent)}</pre>`);
 
         try {
