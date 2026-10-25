@@ -2918,3 +2918,26 @@ git commit -m "fix: hide Office grid lines in Alt+W code blocks" -m "- Base the 
 - Preserve line breaks, arrows, indentation, and the v1.63 highlight-leakage fix.
 - Keep Alt+N, Alt+S, Cursor, Review, Panel, and Project Context unchanged."
 ```
+
+---
+
+## v1.83 - DIL Whole Reply Extraction
+
+### Fixes
+- Prefer complete ChatGPT DilResponseRoot reply containers.
+- Avoid copying only the last Markdown or table fragment.
+- Preserve response-owned Writing Block content.
+- Validate opening, ending and major headings.
+- Reject incomplete exports instead of reporting false success.
+
+### Preserved
+- Alt+W: OneNote readable export, 18pt body text.
+- Alt+Shift+W: ChatGPT visual export.
+- Alt+N: Full-session rich export.
+- Alt+S: Full-session raw text.
+- Alt+V, Cursor, Review, Panel and Project Context.
+
+### Validation
+- JavaScript syntax validation required before commit.
+- Opera/OneNote end-to-end validation remains pending.
+

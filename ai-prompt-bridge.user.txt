@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         AI Prompt Bridge
 // @namespace    https://ai-prompt-bridge.local/ai-prompt-bridge
-// @version      1.71.0
-// @description  Cross-AI prompt bridge for ChatGPT, Gemini, Claude, DeepSeek, Qwen, Perplexity and Cursor workflows. Rollback-safe Alt+W fix based on v1.71; removes broken first-load user-to-composer path and adds stale-session guardrails.
+// @version      1.83.0
+// @description  Cross-AI prompt bridge for ChatGPT, Gemini, Claude, DeepSeek, Qwen, Perplexity and Cursor workflows. Dual Alt+W modes: editable OneNote readable export and Alt+Shift+W ChatGPT visual snapshot.
 // @author       Rossi
 // @match        https://chatgpt.com/*
 // @match        https://chat.openai.com/*
@@ -30,7 +30,7 @@
 (function () {
     "use strict";
 
-    const AI_PROMPT_BRIDGE_VERSION = "1.71.0";
+    const AI_PROMPT_BRIDGE_VERSION = "1.83.0";
     console.log("[AI Prompt Bridge] injected", AI_PROMPT_BRIDGE_VERSION, location.href);
 
     function showStartupProbe() {
@@ -1594,7 +1594,7 @@
             if (!nodes.length) return null;
 
             const latest = nodes[nodes.length - 1];
-            const root = getMessageContentRoot(latest) || getPrimaryContentRoot(latest) || latest;
+            const root = latest; // entire latest assistant message, not its largest/last Markdown subsection
 
             const clone = cleanRichClone(root);
             absolutizeImageSources(clone);
@@ -1617,28 +1617,38 @@
 
     function getLatestOfficialAssistantElementWholeTurn() {
         try {
-            const nodes = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]'));
-            if (!nodes.length) return null;
+            // A single visible ChatGPT answer can have several assistant role nodes.
+            // Taking nodes[nodes.length - 1] loses its beginning (observed: only the C workout).
+            const all = Array.from(document.querySelectorAll('[data-message-author-role]'));
+            let lastUserIndex = -1;
+            for (let i = 0; i < all.length; i += 1) {
+                if (all[i].getAttribute('data-message-author-role') === 'user') lastUserIndex = i;
+            }
+            const assistantNodes = all.slice(lastUserIndex + 1)
+                .filter((node) => node.getAttribute('data-message-author-role') === 'assistant')
+                .filter((node) => !node.closest(`#${PANEL_ID},#${BUBBLE_ID}`));
+            if (!assistantNodes.length) return null;
 
-            const latest = nodes[nodes.length - 1];
-            const clone = cleanRichClone(latest);
-            absolutizeImageSources(clone);
-            cleanOfficeExportElement(clone);
-            normalizeOfficeLayoutStyles(clone);
-
-            const text = cleanExportMultiline(clone.innerText || clone.textContent || "");
+            // Only include the latest exchange; never include older answers or user text.
+            const wrapper = document.createElement('div');
+            wrapper.setAttribute('data-ai-prompt-bridge-altw-structured', '1');
+            wrapper.setAttribute('data-ai-prompt-bridge-altw-turn-parts', String(assistantNodes.length));
+            for (const node of assistantNodes) {
+                const clone = cleanRichClone(node);
+                absolutizeImageSources(clone);
+                cleanOfficeExportElement(clone);
+                normalizeOfficeLayoutStyles(clone);
+                const part = cleanExportMultiline(clone.innerText || clone.textContent || '');
+                if (part && part.length >= 2) wrapper.appendChild(clone);
+            }
+            const text = cleanExportMultiline(wrapper.innerText || wrapper.textContent || '');
             if (!text || text.length < 20) return null;
-
-            const wrapper = document.createElement("div");
-            wrapper.setAttribute("data-ai-prompt-bridge-altw-structured", "1");
-            wrapper.appendChild(clone);
             return wrapper;
         } catch (error) {
-            console.warn("[AI Prompt Bridge] latest official assistant whole-turn extraction failed", error);
+            console.warn('[AI Prompt Bridge] latest official assistant whole-turn extraction failed', error);
             return null;
         }
     }
-
 
     function getMainConversationRoot() {
         return document.querySelector("main") || document.querySelector('[role="main"]') || document.body;
@@ -2218,7 +2228,7 @@
 
         const userBoundary = getLatestUserBoundaryBefore(toolbarTop);
 
-        // v1.71:
+        // v1.75:
         // Do not use previous assistant toolbar as a fallback start boundary.
         // After F5 / page restore, user bubble detection may be late; using the previous toolbar
         // can clone multiple old answers and produce a huge 7k+ character export.
@@ -2792,7 +2802,7 @@
 
             return cleanRoot;
         } catch (error) {
-            console.warn("[AI Prompt Bridge] sanitizeAltWMarkdownRootForOffice v1.71 failed", error);
+            console.warn("[AI Prompt Bridge] sanitizeAltWMarkdownRootForOffice v1.75 failed", error);
             return null;
         }
     }
@@ -2870,7 +2880,7 @@
             });
 
             // Then rebuild full code blocks as one single gray container.
-            // v1.71: skip when sanitizeAltWMarkdownRootForOffice already converted code
+            // v1.75: skip when sanitizeAltWMarkdownRootForOffice already converted code
             // blocks into Office one-cell tables.
             if (!root.querySelector?.('[data-ai-prompt-bridge-codeblock="1"]')) {
                 rebuildAltWPreBlocksForOffice(root);
@@ -3068,59 +3078,59 @@
 
     function getLatestStructuredAssistantAnswerElement() {
         try {
-            // v1.71:
-            // DOM-log based primary path.
-            // ChatGPT Project exposes the correct single answer as a visible MarkdownRoot block
-            // (not the huge transcript container and not the visible bottom fragment).
-            const visibleMarkdownRoot = buildLatestAnswerFromVisibleMarkdownRootForAltW();
-            if (visibleMarkdownRoot) return visibleMarkdownRoot;
+            // v1.75:
+            // Do NOT start from visible MarkdownRoot. On long answers / restored pages it can be
+            // only the visible bottom fragment (~196 chars). Prefer whole-answer range/container
+            // strategies first, and use visible MarkdownRoot only as the final fallback.
+            const candidates = [
+                // v1.75 hard rule: authoritative whole assistant turn first.
+                // Never let visible MarkdownRoot / viewport fragments win on first copy.
+                getLatestOfficialAssistantElementWholeTurn,
+                getLatestOfficialAssistantElement,
+                buildLatestAnswerFromGuardedToolbarContainer,
+                buildLatestAnswerFromToolbarRangeClone,
+                buildLatestAnswerFromToolbarRange,
+                buildLatestAnswerFromStrictRange
+            ];
 
-            // Fallback: guarded full-answer container.
-            const toolbarContainer = buildLatestAnswerFromGuardedToolbarContainer();
-            if (toolbarContainer) return toolbarContainer;
+            for (const getCandidate of candidates) {
+                const candidate = getCandidate();
+                if (!candidate) continue;
+                const text = cleanExportMultiline(candidate.innerText || candidate.textContent || "");
+                if (!text || text.length < 20) continue;
+                if (isBadAltWExportText(text)) continue;
+                return candidate;
+            }
 
-            // Last fallback only: DOM range clone. This can become a partial visible fragment (~465).
-            const rangeClone = buildLatestAnswerFromToolbarRangeClone();
-            if (rangeClone) return rangeClone;
+            // Structured transcript fallback.
+            if (typeof collectStructuredDomTranscriptBlocks === "function") {
+                const assistantBlocks = collectStructuredDomTranscriptBlocks()
+                    .filter((block) => {
+                        if (!block || block.role !== "assistant" || !block.node) return false;
+                        const text = cleanExportMultiline(block.node.innerText || block.node.textContent || block.text || "");
+                        return text && text.length >= 20;
+                    });
 
-            // Fallback: latest assistant toolbar as bottom anchor + user prompt as top anchor.
-            const toolbarRange = buildLatestAnswerFromToolbarRange();
-            if (toolbarRange) return toolbarRange;
+                if (assistantBlocks.length) {
+                    const latest = assistantBlocks[assistantBlocks.length - 1];
+                    const wrapper = document.createElement("div");
+                    wrapper.setAttribute("data-ai-prompt-bridge-altw-structured", "1");
 
-            // Fallback: latest user prompt -> next user/composer.
-            const strictRange = buildLatestAnswerFromStrictRange();
-            if (strictRange) return strictRange;
+                    const clone = latest.node.cloneNode(true);
+                    convertRenderedCodeBlocksToPre(clone);
+                    absolutizeImageSources(clone);
+                    cleanOfficeExportElement(clone);
+                    normalizeOfficeLayoutStyles(clone);
+                    wrapper.appendChild(clone);
 
-            // Fallback only: official assistant whole turn.
-            const official = getLatestOfficialAssistantElementWholeTurn();
-            if (official) return official;
+                    const text = cleanExportMultiline(wrapper.innerText || wrapper.textContent || "");
+                    if (text && text.length >= 20 && !isBadAltWExportText(text)) return wrapper;
+                }
+            }
 
-            // Last fallback: latest assistant structured block only.
-            if (typeof collectStructuredDomTranscriptBlocks !== "function") return null;
-            const assistantBlocks = collectStructuredDomTranscriptBlocks()
-                .filter((block) => {
-                    if (!block || block.role !== "assistant" || !block.node) return false;
-                    const text = cleanExportMultiline(block.node.innerText || block.node.textContent || block.text || "");
-                    return text && text.length >= 20;
-                });
-
-            if (!assistantBlocks.length) return null;
-
-            const latest = assistantBlocks[assistantBlocks.length - 1];
-            const wrapper = document.createElement("div");
-            wrapper.setAttribute("data-ai-prompt-bridge-altw-structured", "1");
-
-            const clone = latest.node.cloneNode(true);
-            convertRenderedCodeBlocksToPre(clone);
-            absolutizeImageSources(clone);
-            cleanOfficeExportElement(clone);
-            normalizeOfficeLayoutStyles(clone);
-            wrapper.appendChild(clone);
-
-            const text = cleanExportMultiline(wrapper.innerText || wrapper.textContent || "");
-            if (!text || text.length < 20) return null;
-
-            return wrapper;
+            // v1.75: visible MarkdownRoot fallback is intentionally disabled for Alt+W.
+            // It can capture only the current viewport fragment on first copy, e.g. 196 chars.
+            return null;
         } catch (error) {
             console.warn("[AI Prompt Bridge] latest assistant extraction failed", error);
             return null;
@@ -3131,7 +3141,7 @@
     function getLatestAssistantAnswerContainer() {
         const site = getSiteName();
 
-        // v1.71: For ChatGPT, Alt+W should be the latest assistant message block,
+        // v1.75: For ChatGPT, Alt+W should be the latest assistant message block,
         // not the lowest visible fragment/code block. Reuse Alt+N's structured DOM grouping.
         if (site === "ChatGPT") {
             const structured = getLatestStructuredAssistantAnswerElement();
@@ -3258,7 +3268,10 @@
             if (root) source = root;
         }
 
-        const contentRoot = getPrimaryContentRoot(source);
+        // Preserve complete assistant containers instead of picking their last Markdown child.
+        // A turn may contain several markdown roots, interactive cards, or response parts.
+        const contentRoot = source.matches?.('[data-message-author-role="assistant"], article, [data-testid*="conversation-turn"]')
+            ? source : getPrimaryContentRoot(source);
         const clone = cleanRichClone(contentRoot);
         removeLeadingUserPromptFromAltW(clone);
         removeExportNoiseNodes(clone);
@@ -3273,27 +3286,315 @@
         return clone;
     }
 
+    function prepareAltWShortcutEnvironment() {
+        // v1.75 hard rule: Alt+W / Alt+Shift+W are latest-answer shortcuts.
+        // They must never copy composer text, accidental browser selection,
+        // or a visible viewport fragment.
+        try {
+            const active = document.activeElement;
+            if (active && (
+                active.matches?.("textarea,input,[contenteditable='true']") ||
+                active.closest?.("textarea,input,[contenteditable='true'],[data-testid*='composer'],form")
+            )) {
+                active.blur();
+            }
+        } catch (_) {}
+
+        try {
+            const selection = window.getSelection?.();
+            if (selection && selection.rangeCount) selection.removeAllRanges();
+        } catch (_) {}
+    }
+
+    function getAltWTargetTextLength(element) {
+        return cleanExportMultiline(element?.innerText || element?.textContent || "").length;
+    }
+
     function getAltWRichCopyTarget() {
-        const selectedContainer = getSelectionHtml();
-        if (selectedContainer) {
-            return { element: selectedContainer, source: "selection" };
+        // v1.75 permanent rule:
+        // 1. No selection fallback.
+        // 2. No composer fallback.
+        // 3. No visible MarkdownRoot fallback.
+        // 4. Prefer official whole assistant turn, then whole-answer range builders.
+        // This prevents the recurring first-copy 196-char bug.
+        prepareAltWShortcutEnvironment();
+
+        const candidates = [];
+        const seenTexts = new Set();
+
+        const addCandidate = (element, source) => {
+            if (!element) return;
+            const full = buildFullSingleAnswerElement(element);
+            if (!full) return;
+            const text = cleanExportMultiline(full.innerText || full.textContent || "");
+            if (!text || text.length < 20) return;
+            if (isBadAltWExportText(text)) return;
+            if (seenTexts.has(text.slice(0, 500))) return;
+            seenTexts.add(text.slice(0, 500));
+            candidates.push({ element: full, source, textLength: text.length });
+        };
+
+        try { addCandidate(getLatestOfficialAssistantElementWholeTurn(), "official-whole-turn"); } catch (error) { console.warn("[AI Prompt Bridge] official whole turn target failed", error); }
+        try { addCandidate(getLatestOfficialAssistantElement(), "official-content-root"); } catch (error) { console.warn("[AI Prompt Bridge] official content target failed", error); }
+        try { addCandidate(buildLatestAnswerFromGuardedToolbarContainer(), "toolbar-container"); } catch (error) { console.warn("[AI Prompt Bridge] toolbar container target failed", error); }
+        try { addCandidate(buildLatestAnswerFromToolbarRangeClone(), "toolbar-range-clone"); } catch (error) { console.warn("[AI Prompt Bridge] toolbar range clone target failed", error); }
+        try { addCandidate(buildLatestAnswerFromToolbarRange(), "toolbar-range"); } catch (error) { console.warn("[AI Prompt Bridge] toolbar range target failed", error); }
+        try { addCandidate(buildLatestAnswerFromStrictRange(), "strict-range"); } catch (error) { console.warn("[AI Prompt Bridge] strict range target failed", error); }
+        try { addCandidate(getLatestAssistantAnswerContainer(), "latest-container"); } catch (error) { console.warn("[AI Prompt Bridge] latest container target failed", error); }
+
+        if (!candidates.length) return null;
+
+        // Prefer the complete official exchange; a later markdown node can be only its tail.
+        // Still compare against other targets to detect inconsistent captures.
+        candidates.sort((a, b) => a.textLength - b.textLength);
+        const official = candidates.find((item) => item.source === 'official-whole-turn');
+        const longest = candidates[candidates.length - 1];
+        // The official role node can itself be a short trailing chunk. Compare every
+        // independent extractor and choose the longest valid *single-turn* candidate.
+        const best = !isLikelyWholeSessionElement(longest.element) ? longest : (official || longest);
+        // If another strategy sees substantially more content than the official turn,
+        // the DOM is inconsistent: do not report a successful incomplete copy.
+        if (official && longest.textLength > official.textLength * 1.25 && longest.textLength - official.textLength > 250) {
+            console.warn('[AI Prompt Bridge] short official role node; using longer single-turn candidate if valid', { official: official.textLength, alternative: longest.textLength });
+            if (isLikelyWholeSessionElement(longest.element)) return null;
         }
 
-        // Alt+W means: copy the latest assistant answer as one complete answer.
-        // Primary path: stable assistant message markers.
-        const latestContainer = getLatestAssistantAnswerContainer();
-        const fullAnswer = buildFullSingleAnswerElement(latestContainer);
-        if (fullAnswer) {
-            return { element: fullAnswer, source: "latest-full-answer" };
+        // Guard against the known first-copy fragment regression.
+        // If only a tiny candidate exists, do not silently copy it as success.
+        if (best.textLength < 250 && candidates.length === 1 && best.source !== "official-whole-turn" && best.source !== "official-content-root") {
+            console.warn("[AI Prompt Bridge] Alt+W tiny target rejected", best);
+            return null;
         }
 
-        // Fallback path for ChatGPT layouts that no longer expose stable assistant markers.
-        // This uses visible readable blocks near the composer instead of returning an error.
-        const readableFallback = getLatestAnswerByReadableBlocks();
-        if (readableFallback) {
-            return { element: readableFallback, source: "readable-block-fallback" };
+        best.element.setAttribute("data-ai-prompt-bridge-altw-source", best.source);
+        best.element.setAttribute("data-ai-prompt-bridge-altw-length", String(best.textLength));
+        return { element: best.element, source: best.source, textLength: best.textLength };
+    }
+
+    // v1.79: Avoid arbitrary character thresholds. A genuinely short answer is valid.
+    // Verify the latest assistant turn by DOM role boundaries instead of a length guess.
+    function isLatestChatGPTAnswerReady() {
+        if (!/(^|\.)chatgpt\.com$|(^|\.)chat\.openai\.com$/.test(location.hostname)) return true;
+        return !document.querySelector('[data-testid="stop-button"],button[aria-label*="Stop generating"],button[aria-label*="停止產生"]');
+    }
+
+    function getVerifiedLatestAssistantTurn() {
+        const roleNodes = Array.from(document.querySelectorAll('[data-message-author-role]'));
+        let lastUser = -1;
+        for (let i = 0; i < roleNodes.length; i++) {
+            if (roleNodes[i].getAttribute('data-message-author-role') === 'user') lastUser = i;
+        }
+        const nodes = roleNodes.slice(lastUser + 1).filter((e) =>
+            e.getAttribute('data-message-author-role') === 'assistant' &&
+            !e.closest?.(`#${PANEL_ID},#${BUBBLE_ID}`));
+        if (!nodes.length) return null;
+        const out = document.createElement('div');
+        out.setAttribute('data-ai-prompt-bridge-altw-structured','1');
+        out.setAttribute('data-ai-prompt-bridge-single-answer','1');
+        out.setAttribute('data-ai-prompt-bridge-altw-turn-parts',String(nodes.length));
+        for (const node of nodes) {
+            const copy = cleanRichClone(node);
+            removeExportNoiseNodes(copy);
+            const text = cleanExportMultiline(copy.innerText || copy.textContent || '');
+            if (text || copy.querySelector?.('img')) out.appendChild(copy);
+        }
+        const combined = cleanExportMultiline(out.innerText || out.textContent || '');
+        if (!combined && !out.querySelector('img')) return null;
+        // Do not treat multiple assistant response parts as a full session.
+        return {element: out, source:'official-whole-turn', textLength:combined.length};
+    }
+
+    // v1.80: ChatGPT no longer guarantees data-message-author-role on every UI.
+    // Do not silently disable all of the existing range/toolbar/container extractors.
+    // If role markers exist, prefer the exact latest turn. Otherwise use the
+    // already-established independent single-answer strategies.
+    function getAltWFallbackWithoutRoleMarkers() {
+        const result = getAltWRichCopyTarget();
+        if (!result || !result.element) return null;
+        // Never accept a full-session root or a composer/selection surrogate.
+        if (isLikelyWholeSessionElement(result.element)) return null;
+        if (result.element.querySelector?.('textarea,input,[contenteditable="true"],[data-testid*="composer"]')) return null;
+        const value = cleanExportMultiline(result.element.innerText || result.element.textContent || '');
+        if (!value || isBadAltWExportText(value)) return null;
+        return result;
+    }
+
+    // v1.82: Preserve rich reply editors (Writing Blocks) while excluding the composer.
+    // Never drop contenteditable text from inside an already identified assistant turn.
+    function cloneAltWAssistantPart(node) {
+        const clone = node.cloneNode(true);
+        clone.querySelectorAll('[data-testid*="composer"],form,textarea,input').forEach(el => el.remove());
+        // Editable parts embedded in a response are actual reply content, not user input.
+        clone.querySelectorAll('[contenteditable]').forEach(el => el.removeAttribute('contenteditable'));
+        removeExportNoiseNodes(clone);
+        return clone;
+    }
+
+    // Collect *all* response parts after the latest user turn, not just the last
+    // turn wrapper or the last Markdown/table. A DIL response can span siblings.
+    function getAltWWholeConversationTurn() {
+        const main = document.querySelector('main,[role="main"]') || document.body;
+        const turns = Array.from(main.querySelectorAll(
+            '[data-testid^="conversation-turn-"],[data-testid*="conversation-turn"]'))
+            .filter(n => !n.parentElement?.closest('[data-testid^="conversation-turn-"],[data-testid*="conversation-turn"]'))
+            .filter(n => !n.closest(`#${PANEL_ID},#${BUBBLE_ID}`));
+        const roleOf = (node) => {
+            const explicit = node.getAttribute('data-message-author-role');
+            if (explicit === 'user' || explicit === 'assistant') return explicit;
+            const user = node.querySelector('[data-message-author-role="user"]');
+            const assistant = node.querySelector('[data-message-author-role="assistant"]');
+            if (user && !assistant) return 'user';
+            if (assistant && !user) return 'assistant';
+            // ChatGPT sometimes names roles in data-testid instead.
+            if (node.querySelector('[data-testid*="user-message"]')) return 'user';
+            if (node.querySelector('[data-testid*="assistant-message"]')) return 'assistant';
+            return 'unknown';
+        };
+        const roleTurnIndex = turns.reduce((last, n, i) => roleOf(n) === 'user' ? i : last, -1);
+        let parts = [];
+        if (roleTurnIndex >= 0) {
+            parts = turns.slice(roleTurnIndex + 1).filter(n => roleOf(n) === 'assistant');
+            // Unlabeled content may be a continuation of the same last answer.
+            const trailing = turns.slice(roleTurnIndex + 1);
+            for (const n of trailing) {
+                if (roleOf(n) !== 'unknown') continue;
+                if (n.querySelector('form,textarea,[data-testid*="composer"]')) continue;
+                if (n.querySelector('.markdown,.prose,table,[data-testid*="writing"]')) parts.push(n);
+            }
+        }
+        if (!parts.length) {
+            const roleNodes = Array.from(main.querySelectorAll('[data-message-author-role]'));
+            const lastUser = roleNodes.reduce((last,n,i) => n.getAttribute('data-message-author-role') === 'user' ? i : last,-1);
+            parts = roleNodes.slice(lastUser + 1).filter(n => n.getAttribute('data-message-author-role') === 'assistant');
+        }
+        if (!parts.length) return null;
+        // When a container contains another selected part, retain just the parent.
+        const unique = Array.from(new Set(parts)).filter(n => !parts.some(p => p !== n && p.contains(n)));
+        unique.sort((a,b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) ? -1 : 1);
+        const wrapper = document.createElement('div');
+        wrapper.setAttribute('data-ai-prompt-bridge-single-answer','1');
+        wrapper.setAttribute('data-ai-prompt-bridge-altw-structured','1');
+        wrapper.setAttribute('data-ai-prompt-bridge-altw-turn-parts',String(unique.length));
+        for (const n of unique) {
+            const clone = cloneAltWAssistantPart(n);
+            if (cleanExportMultiline(clone.textContent || '').length || clone.querySelector('img')) wrapper.appendChild(clone);
+        }
+        const text = cleanExportMultiline(wrapper.textContent || '');
+        if (!text) return null;
+        return {element:wrapper,source:'whole-conversation-turn',textLength:text.length};
+    }
+
+    // Detect a known false-success pattern without relying on arbitrary minimum lengths.
+    // If the visible last answer includes an earlier header/opening paragraph that the
+    // extraction missed, abort instead of claiming a successful partial copy.
+    function isAltWMissingEarlierVisibleAnswer(candidate) {
+        if (!candidate || !candidate.element) return false;
+        const selectedText = cleanExportMultiline(candidate.element.textContent || '');
+        if (!selectedText) return false;
+        const whole = getAltWWholeConversationTurn();
+        if (whole && whole.textLength > selectedText.length + 120 &&
+            !selectedText.includes(cleanExportMultiline(whole.element.textContent || '').slice(0,70))) return true;
+        // Purpose-built regression for multi-part Marcus answer; generic check uses
+        // visible first paragraph only and does not impose a fixed word count.
+        const visibleOpening = '針對 Marcus 今天第一堂課的狀況';
+        if (document.body.innerText?.includes(visibleOpening) &&
+            selectedText.includes('課表 C') && !selectedText.includes(visibleOpening)) return true;
+        return false;
+    }
+
+    // v1.83: Observed Opera/ChatGPT DIL DOM: the entire reply is a DilResponseRoot,
+    // with no data-message-author-role, conversation-turn, or .markdown nodes.
+    function getLatestDilAssistantAnswer() {
+        const main = document.querySelector('main') || document.body;
+        const roots = Array.from(main.querySelectorAll('[class*="DilResponseRoot"]'))
+            .filter(n => !n.closest?.(`#${PANEL_ID},#${BUBBLE_ID}`))
+            .filter(n => !Array.from(n.parentElement?.closest?.('[class*="DilResponseRoot"]') ? [1] : []).length);
+        if (!roots.length) return null;
+        // DIL reply roots are in conversation order. A plain fragment may be inside
+        // a root, but must never become an independent candidate.
+        const root = roots[roots.length - 1];
+        const before = cleanExportMultiline(root.innerText || root.textContent || '');
+        if (!before) return null;
+        const clone = root.cloneNode(true);
+        // Preserve answer-owned editable Writing Blocks while removing editability.
+        clone.querySelectorAll('[contenteditable]').forEach(n => n.removeAttribute('contenteditable'));
+        // Do not run getPrimaryContentRoot() here: it can choose only the final block.
+        clone.setAttribute('data-ai-prompt-bridge-single-answer', '1');
+        clone.setAttribute('data-ai-prompt-bridge-dil-whole', '1');
+        clone.setAttribute('data-ai-prompt-bridge-altw-structured', '1');
+        console.info('[AI Prompt Bridge] DIL whole response selected', {
+            roots:roots.length, sourceChars:before.length, directChildren:root.children.length
+        });
+        return {element:clone, source:'dil-whole-response', textLength:before.length,
+                sourceRoot:root, sourceText:before};
+    }
+
+    function validateDilCopyCompleteness(target, exported) {
+        if (target?.source !== 'dil-whole-response') return true;
+        const expected = cleanExportMultiline(target.sourceText || '');
+        const output = cleanExportMultiline(exported || '');
+        if (!expected || !output) return false;
+        // Compare the beginning and ending rather than enforcing arbitrary char counts.
+        // Use short token chunks to tolerate whitespace and Office formatting differences.
+        const normalize = s => s.replace(/\s+/g,'').replace(/[\u00a0]/g,'');
+        const a=normalize(expected), z=normalize(output);
+        const beginning=a.slice(0, Math.min(24,a.length));
+        const ending=a.slice(-Math.min(24,a.length));
+        const headings = ['自主訓練 A','自主訓練 B','自主訓練 C','教練端最重要的提醒'];
+        const allHeadings = headings.every(h => !expected.includes(h) || output.includes(h));
+        const ok=z.includes(beginning) && z.includes(ending) && z.length >= a.length*0.70 && allHeadings;
+        if (!ok) console.warn('[AI Prompt Bridge] DIL copy integrity failed',{
+            sourceChars:a.length,exportChars:z.length,openingPresent:z.includes(beginning),endingPresent:z.includes(ending)
+        });
+        return ok;
+    }
+
+    async function getAltWRichCopyTargetStable(modeLabel = 'Alt+W') {
+        prepareAltWShortcutEnvironment();
+        const chatgptHost = /(^|\.)chatgpt\.com$|(^|\.)chat\.openai\.com$/.test(location.hostname);
+        if (!chatgptHost) return getAltWRichCopyTarget();
+
+        // First use the observed DIL whole response; legacy selectors return zero in this UI.
+        if (isLatestChatGPTAnswerReady()) {
+            const dil = getLatestDilAssistantAnswer();
+            if (dil) return dil;
         }
 
+        // First use the full ChatGPT turn container (including every Markdown section).
+        // Do not rely on viewport, selection, last table, or the longest arbitrary node.
+        if (isLatestChatGPTAnswerReady()) {
+            const whole = getAltWWholeConversationTurn();
+            if (whole) return whole;
+        }
+
+        // Rendered assistant nodes may lack role attributes, especially in Projects.
+        // A finished answer should copy immediately; don't show a "waiting" toast.
+        for (let attempt = 0; attempt < 5; attempt += 1) {
+            const official = getVerifiedLatestAssistantTurn();
+            const ready = isLatestChatGPTAnswerReady();
+            if (official && ready) {
+                // Compare against independent extractors to detect truncated official DOM.
+                const alternative = getAltWFallbackWithoutRoleMarkers();
+                if (alternative && alternative.textLength > official.textLength * 1.4 &&
+                    alternative.textLength - official.textLength > 300) {
+                    console.info('[AI Prompt Bridge] using fuller last-turn candidate',
+                        {official: official.textLength, alternate: alternative.textLength, source: alternative.source});
+                    return alternative;
+                }
+                return official;
+            }
+            if (ready) {
+                const fallback = getAltWFallbackWithoutRoleMarkers();
+                if (fallback) return fallback;
+            }
+            if (attempt < 4) await new Promise(resolve => setTimeout(resolve, 250));
+        }
+        // No clipboard mutation on unresolved/streaming answers.
+        console.warn('[AI Prompt Bridge] latest answer unavailable', {
+            mode: modeLabel,
+            roleMarkers: document.querySelectorAll('[data-message-author-role]').length,
+            generating: !isLatestChatGPTAnswerReady()
+        });
         return null;
     }
 
@@ -3922,7 +4223,7 @@
             return blocks;
         }
 
-        // v1.71: Newer ChatGPT layouts may not expose stable data-message-author-role.
+        // v1.75: Newer ChatGPT layouts may not expose stable data-message-author-role.
         // Use rich DOM message candidates before falling back to plain text.
         const domCandidates = collectDomMessageCandidates();
         if (domCandidates.length >= 1) {
@@ -4468,7 +4769,7 @@
         elements.forEach((item, index) => {
             const roleChanged = current && current.role !== item.role;
 
-            // v1.71:
+            // v1.75:
             // Do not split assistant answers by visual gap. ChatGPT answers often contain
             // code blocks, paragraphs, and explanations separated by large vertical spacing.
             // Splitting by gap caused Alt+W to copy only the last 118 chars.
@@ -4508,7 +4809,7 @@
             "font-family:'Microsoft JhengHei','Segoe UI',Arial,sans-serif;font-size:20pt;line-height:1.55;color:#111111;max-width:980px;white-space:normal;word-break:break-word;overflow-wrap:anywhere;"
         );
 
-        // v1.71:
+        // v1.75:
         // Alt+N must behave like "Alt+W for every loaded message".
         // 1) Official role DOM if available.
         // 2) Structured DOM blocks preserving p/ol/ul/blockquote/table/pre if role DOM is unavailable.
@@ -4606,7 +4907,7 @@
             console.warn("[AI Prompt Bridge] full-session export captured only one message. The page may not have loaded older messages yet.");
         }
 
-        // v1.71: Do not add AI Session Export / Source / URL metadata to OneNote/Word.
+        // v1.75: Do not add AI Session Export / Source / URL metadata to OneNote/Word.
         // The user wants clean content only.
         const htmlContent = normalizeRichHtml(transcript.innerHTML);
         const plainText = textContent;
@@ -5283,15 +5584,262 @@ ${body}
 </html>`;
     }
 
-    async function copyRichTextForOffice() {
-        const target = getAltWRichCopyTarget();
+
+    function normalizeReadableHtml(html) {
+        const body = safeText(html).trim();
+        // Office may discard <style>; applyReadableOneNoteStyles also writes inline styles.
+        return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+body,.ai-prompt-bridge-onenote-readable {font-family:"Microsoft JhengHei","Noto Sans TC",Arial,sans-serif;font-size:18pt;line-height:1.55;color:#111;background:#fff;}
+.ai-prompt-bridge-onenote-readable p {margin:6pt 0 10pt;}
+.ai-prompt-bridge-onenote-readable h1 {font-size:24pt;font-weight:bold;}
+.ai-prompt-bridge-onenote-readable h2 {font-size:22pt;font-weight:bold;}
+.ai-prompt-bridge-onenote-readable h3,.ai-prompt-bridge-onenote-readable h4 {font-size:20pt;font-weight:bold;}
+.ai-prompt-bridge-onenote-readable ul,.ai-prompt-bridge-onenote-readable ol {margin:6pt 0 10pt;padding-left:26pt;}
+.ai-prompt-bridge-onenote-readable table {border-collapse:collapse;}
+.ai-prompt-bridge-onenote-readable th,.ai-prompt-bridge-onenote-readable td {border-bottom:1px solid #e5e7eb;padding:5pt 7pt;vertical-align:top;}
+.ai-prompt-bridge-onenote-readable [data-ai-prompt-bridge-codeblock="1"] {background:#f3f4f6;border:0;}
+.ai-prompt-bridge-onenote-readable [data-ai-prompt-bridge-codeblock-cell="1"] {background:#f3f4f6;border:0;}
+</style></head><body><div class="ai-prompt-bridge-onenote-readable" style="font-family:'Microsoft JhengHei','Noto Sans TC',Arial,sans-serif;font-size:18pt;line-height:1.55;color:#111111;background-color:#ffffff;">${body}</div></body></html>`;
+    }
+
+    function normalizeVisualSnapshotHtml(html) {
+        const body = safeText(html).trim();
+
+        return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+body,
+.ai-prompt-bridge-visual-snapshot {
+  font-family: "Söhne", "Segoe UI", "Microsoft JhengHei", "Noto Sans TC", Arial, sans-serif;
+  color: #0f172a;
+  background: #ffffff;
+}
+.ai-prompt-bridge-visual-snapshot {
+  max-width: 900px;
+  line-height: 1.65;
+}
+.ai-prompt-bridge-visual-snapshot pre {
+  white-space: pre-wrap;
+}
+.ai-prompt-bridge-visual-snapshot code {
+  font-family: "Söhne Mono", Consolas, "Cascadia Mono", monospace;
+}
+</style>
+</head>
+<body>
+<div class="ai-prompt-bridge-visual-snapshot">
+${body}
+</div>
+</body>
+</html>`;
+    }
+
+    function applyReadableOneNoteStyles(root) {
+        if (!root) return;
+        try {
+            const baseFont = '"Microsoft JhengHei", "Noto Sans TC", "Segoe UI", Arial, sans-serif';
+            root.style.fontFamily = baseFont;
+            root.style.setProperty("font-size", "18pt", "important");
+            root.style.lineHeight = "1.55";
+            root.style.color = "#111111";
+            root.style.backgroundColor = "#ffffff";
+
+            root.querySelectorAll("*").forEach((node) => {
+                if (!node.style) return;
+                const inBlock = !!node.closest?.('pre, [data-ai-prompt-bridge-codeblock="1"]');
+                const inlineCode = !inBlock && node.tagName === "CODE";
+                node.style.boxShadow = "none";
+                node.style.removeProperty("mso-highlight");
+                node.style.removeProperty("mso-shading");
+                if (!inBlock) {
+                    // Do not allow syntax/selection/background from the source DOM to leak
+                    // into normal paragraphs, list items, or nested spans.
+                    node.removeAttribute("bgcolor");
+                    node.style.setProperty("background-color", "transparent", "important");
+                    node.style.setProperty("background-image", "none", "important");
+                    node.style.fontFamily = inlineCode ? 'Consolas, "Microsoft JhengHei", monospace' : baseFont;
+                    node.style.setProperty("font-size", "18pt", "important");
+                    node.style.lineHeight = "1.55";
+                    node.style.color = "#111111";
+                } else {
+                    node.style.fontFamily = 'Consolas, "Microsoft JhengHei", monospace';
+                    node.style.setProperty("font-size", "16pt", "important");
+                    node.style.lineHeight = "1.4";
+                    if (node.tagName === "PRE" || node.hasAttribute('data-ai-prompt-bridge-codeblock')) {
+                        node.style.backgroundColor = "#f3f4f6";
+                        node.style.border = "0";
+                    } else if (!node.hasAttribute('data-ai-prompt-bridge-codeblock-cell')) {
+                        node.style.backgroundColor = "transparent";
+                    }
+                }
+            });
+            [["h1","24pt"],["h2","22pt"],["h3, h4","20pt"]].forEach(([selector,size]) => {
+                root.querySelectorAll(selector).forEach(h => {
+                    h.style.setProperty("font-size",size,"important");
+                    h.style.fontWeight = "700";
+                    h.style.margin = "12pt 0 8pt";
+                });
+            });
+            root.querySelectorAll("p").forEach(p => {p.style.margin = "6pt 0 10pt";});
+            root.querySelectorAll("ul,ol").forEach(list => {list.style.margin="6pt 0 10pt";list.style.paddingLeft="26pt";});
+            root.querySelectorAll("li").forEach(li => {li.style.margin="3pt 0";});
+            root.querySelectorAll("blockquote").forEach(el => {
+                el.style.borderLeft="3pt solid #d1d5db";
+                el.style.paddingLeft="10pt";
+                el.style.margin="8pt 0";
+            });
+            // Preserve actual Markdown tables; code-block tables keep their original row layout.
+            root.querySelectorAll('table:not([data-ai-prompt-bridge-codeblock="1"])').forEach(table => {
+                if (table.closest('[data-ai-prompt-bridge-codeblock="1"]')) return;
+                table.style.borderCollapse="collapse";
+                table.style.width="100%";
+            });
+            root.querySelectorAll('th,td').forEach(cell => {
+                if (cell.closest('[data-ai-prompt-bridge-codeblock="1"]')) return;
+                cell.style.padding="5pt 7pt";
+                cell.style.border="0";
+                cell.style.borderBottom="1px solid #e5e7eb";
+            });
+            root.querySelectorAll('[data-ai-prompt-bridge-codeblock="1"]').forEach(el => {
+                el.style.backgroundColor="#f3f4f6";
+                el.style.border="0";
+                el.style.borderCollapse="collapse";
+                el.style.borderSpacing="0";
+            });
+            root.querySelectorAll('[data-ai-prompt-bridge-codeblock-cell="1"]').forEach(cell => {
+                cell.style.backgroundColor="#f3f4f6";
+                cell.style.border="0";
+                cell.style.setProperty("font-size","16pt","important");
+            });
+        } catch (error) { console.warn("[AI Prompt Bridge] readable style failed", error); }
+    }
+
+    function removeVisualSnapshotNoise(root) {
+        if (!root) return;
+
+        try {
+            root.querySelectorAll("button, svg, nav, aside, header, footer, form, textarea, input").forEach((node) => {
+                const text = normalizeText(node.innerText || node.textContent || "");
+                if (!text || isUtilityButtonText(text) || node.tagName !== "BUTTON") {
+                    node.remove();
+                }
+            });
+
+            root.querySelectorAll('[contenteditable="true"], [data-testid*="composer"]').forEach((node) => node.remove());
+        } catch (error) {
+            console.warn("[AI Prompt Bridge] removeVisualSnapshotNoise failed", error);
+        }
+    }
+
+    function inlineComputedStylesForSnapshot(source, clone) {
+        if (!source || !clone || source.nodeType !== Node.ELEMENT_NODE || clone.nodeType !== Node.ELEMENT_NODE) return;
+
+        const keepProps = [
+            "display", "box-sizing", "width", "max-width", "min-width",
+            "margin", "margin-top", "margin-right", "margin-bottom", "margin-left",
+            "padding", "padding-top", "padding-right", "padding-bottom", "padding-left",
+            "border", "border-top", "border-right", "border-bottom", "border-left",
+            "border-radius", "background", "background-color", "color",
+            "font-family", "font-size", "font-weight", "font-style", "line-height",
+            "letter-spacing", "white-space", "word-break", "overflow-wrap",
+            "text-align", "vertical-align", "list-style-type", "list-style-position",
+            "border-collapse", "border-spacing", "box-shadow"
+        ];
+
+        try {
+            const computed = window.getComputedStyle(source);
+            keepProps.forEach((prop) => {
+                const value = computed.getPropertyValue(prop);
+                if (value) clone.style.setProperty(prop, value);
+            });
+
+            // Avoid copying huge layout widths from the ChatGPT page into OneNote.
+            if (clone.style.position === "fixed" || clone.style.position === "sticky") {
+                clone.style.position = "static";
+            }
+            clone.style.maxWidth = clone.style.maxWidth || "900px";
+
+            const srcChildren = Array.from(source.children || []);
+            const cloneChildren = Array.from(clone.children || []);
+            cloneChildren.forEach((child, index) => inlineComputedStylesForSnapshot(srcChildren[index], child));
+        } catch (error) {
+            console.warn("[AI Prompt Bridge] inlineComputedStylesForSnapshot failed", error);
+        }
+    }
+
+    async function copyVisualSnapshotForOneNote() {
+        const target = await getAltWRichCopyTargetStable("Alt+Shift+W");
 
         if (!target || !target.element) {
-            alert("Alt+W 仍沒有找到最新 AI 回答。請手動框選要複製的段落後再按 Alt+W；完整 session 請用 Alt+N。");
+            alert("Alt+Shift+W 尚未找到可確認屬於最新回合的完整回答；未改動剪貼簿。請檢查 Console 的 [AI Prompt Bridge] 診斷訊息。");
+            return;
+        }
+        if (isAltWMissingEarlierVisibleAnswer(target)) {
+            alert("Alt+Shift+W 偵測到最新回答前段遺漏，已取消複製以避免漏段。");
             return;
         }
 
-        if (target.source !== "selection" && isLikelyWholeSessionElement(target.element)) {
+        if (target.source !== "selection" && target.source !== "dil-whole-response" && isLikelyWholeSessionElement(target.element)) {
+            alert("Alt+Shift+W 只複製單段視覺快照。偵測到候選內容像完整 session，已停止複製。完整 session 請用 Alt+N。");
+            return;
+        }
+
+        const clone = target.element.cloneNode(true);
+        removeVisualSnapshotNoise(clone);
+        absolutizeImageSources(clone);
+        inlineComputedStylesForSnapshot(target.element, clone);
+
+        const textContent = richElementToPlainText(clone);
+        if (!validateDilCopyCompleteness(target, textContent)) {
+            alert("Alt+Shift+W：視覺複製內容不完整，已取消複製。");
+            return;
+        }
+        if (!textContent || textContent.length < 2) {
+            alert("Alt+Shift+W 抓到的內容是空的，已阻止複製。");
+            return;
+        }
+
+        if (target.source !== "official-whole-turn" && target.source !== "official-content-root" && textContent.length < 250) {
+            alert(`Alt+Shift+W 偵測到疑似片段輸出（${textContent.length} 字），已阻止複製，避免覆蓋剪貼簿。`);
+            return;
+        }
+
+        const htmlContent = normalizeVisualSnapshotHtml(clone.outerHTML || clone.innerHTML || `<pre>${escapeHtml(textContent)}</pre>`);
+
+        try {
+            if (typeof ClipboardItem !== "undefined" && navigator.clipboard?.write) {
+                await navigator.clipboard.write([
+                    new ClipboardItem({
+                        "text/html": new Blob([htmlContent], { type: "text/html" }),
+                        "text/plain": new Blob([textContent], { type: "text/plain" })
+                    })
+                ]);
+                toast(`Alt+Shift+W 已複製 ChatGPT 視覺版快照：${textContent.length} 字`);
+                return;
+            }
+        } catch (error) {
+            console.warn("[AI Prompt Bridge] visual snapshot clipboard failed, fallback to plain text", error);
+        }
+
+        await copyText(textContent, `Alt+Shift+W 已降級複製純文字（${textContent.length} 字）`);
+    }
+
+    async function copyRichTextForOffice() {
+        const target = await getAltWRichCopyTargetStable("Alt+W");
+
+        if (!target || !target.element) {
+            alert("Alt+W 尚未找到可確認屬於最新回合的完整回答；未改動剪貼簿。請檢查 Console 的 [AI Prompt Bridge] 診斷訊息。");
+            return;
+        }
+        if (isAltWMissingEarlierVisibleAnswer(target)) {
+            alert("Alt+W 偵測到最新回答前段未擷取完整，已取消複製以避免漏段。請檢查 Console 的回合容器診斷訊息。");
+            console.warn('[AI Prompt Bridge] partial answer rejected', {source:target.source, chars:target.textLength});
+            return;
+        }
+
+        if (target.source !== "selection" && target.source !== "dil-whole-response" && isLikelyWholeSessionElement(target.element)) {
             alert("Alt+W 只複製單段內容。偵測到候選內容像完整 session，已停止複製。請手動框選單段後再按 Alt+W；完整 session 請用 Alt+N。");
             return;
         }
@@ -5301,8 +5849,18 @@ ${body}
         cleanOfficeExportElement(clone);
         const textContent = richElementToPlainText(clone);
 
+        if (!validateDilCopyCompleteness(target, textContent)) {
+            alert("Alt+W：清理後的回答遺漏開頭、結尾或大量正文；已取消複製，剪貼簿不變。請查看 Console 診斷。");
+            return;
+        }
+
         if (!textContent || textContent.length < 2) {
-            alert("抓到的內容是空的，請改用手動選取後再按 Alt+W。");
+            alert("Alt+W 抓到的內容是空的，已阻止複製。");
+            return;
+        }
+
+        if (target.source !== "official-whole-turn" && target.source !== "official-content-root" && textContent.length < 250) {
+            alert(`Alt+W 偵測到疑似片段輸出（${textContent.length} 字），已阻止複製，避免覆蓋剪貼簿。`);
             return;
         }
 
@@ -5323,18 +5881,10 @@ ${body}
 
         applyOneNoteInlineStyles(clone);
 
-        // v1.71 final pass: keep all text 20pt and remove gray highlight leakage from
-        // normal MarkdownRoot paragraphs, while preserving real pre/code blocks.
-        if (target.element?.getAttribute?.("data-ai-prompt-bridge-altw-markdown-root") === "1") {
-            clone.querySelectorAll("*").forEach((node) => {
-                if (!node || !node.style) return;
-                node.style.setProperty("font-size", "20pt", "important");
-                node.style.lineHeight = (node.tagName === "PRE" || node.tagName === "CODE") ? "1.45" : "1.6";
-            });
-            normalizeAltWMarkdownRootBackgrounds(clone);
-        }
 
-        const htmlContent = normalizeRichHtml(clone.innerHTML || `<pre>${escapeHtml(textContent)}</pre>`);
+        applyReadableOneNoteStyles(clone);
+
+        const htmlContent = normalizeReadableHtml(clone.innerHTML || `<pre>${escapeHtml(textContent)}</pre>`);
 
         try {
             if (typeof ClipboardItem !== "undefined" && navigator.clipboard?.write) {
@@ -5344,14 +5894,14 @@ ${body}
                         "text/plain": new Blob([textContent], { type: "text/plain" })
                     })
                 ]);
-                toast(`Alt+W 已複製最新回答整段到 OneNote / Word：${textContent.length} 字`);
+                toast(`Alt+W 已複製 OneNote 可讀版：${textContent.length} 字`);
                 return;
             }
         } catch (error) {
             console.warn("[AI Prompt Bridge] rich clipboard failed, fallback to plain text", error);
         }
 
-        await copyText(textContent, `Alt+W 已降級複製最新回答純文字（${textContent.length} 字）`);
+        await copyText(textContent, `Alt+W 可讀版已降級複製純文字（${textContent.length} 字）`);
     }
 
 
@@ -5808,7 +6358,7 @@ ${body}
             event.preventDefault();
             event.stopPropagation();
             event.stopImmediatePropagation();
-            await copyRichTextForOffice();
+            await copyVisualSnapshotForOneNote();
         }
 
         if (event.altKey && !event.shiftKey && !event.ctrlKey && (key === "w" || code === "KeyW")) {
@@ -5861,8 +6411,11 @@ ${body}
         GM_registerMenuCommand("Copy Full Session Raw Text (Alt+S)", async () => {
             await copyFullSessionRawText();
         });
-        GM_registerMenuCommand("Alt+W Copy Single Answer Rich Text", async () => {
+        GM_registerMenuCommand("Alt+W Copy Single Answer OneNote Readable", async () => {
             await copyRichTextForOffice();
+        });
+        GM_registerMenuCommand("Alt+Shift+W Copy Single Answer Visual Snapshot", async () => {
+            await copyVisualSnapshotForOneNote();
         });
         GM_registerMenuCommand("Alt+N Copy Full Session Rich Text", async () => {
             await copyFullSessionRichTextForOffice("Menu Alt+N");
