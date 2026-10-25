@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AI Prompt Bridge
 // @namespace    https://ai-prompt-bridge.local/ai-prompt-bridge
-// @version      1.83.0
+// @version      1.85.0
 // @description  Cross-AI prompt bridge for ChatGPT, Gemini, Claude, DeepSeek, Qwen, Perplexity and Cursor workflows. Dual Alt+W modes: editable OneNote readable export and Alt+Shift+W ChatGPT visual snapshot.
 // @author       Rossi
 // @match        https://chatgpt.com/*
@@ -30,7 +30,7 @@
 (function () {
     "use strict";
 
-    const AI_PROMPT_BRIDGE_VERSION = "1.83.0";
+    const AI_PROMPT_BRIDGE_VERSION = "1.85.0";
     console.log("[AI Prompt Bridge] injected", AI_PROMPT_BRIDGE_VERSION, location.href);
 
     function showStartupProbe() {
@@ -541,8 +541,162 @@
     }
 
 
+    // v1.85: identify modern ChatGPT user bubbles without guessing that all main text is a message.
+    // A DIL answer is not a user prompt. Never classify answer descendants as user messages.
+    function getChatGPTUserBubbles(main, assistantRoots) {
+        const selectors = [
+            '[data-message-author-role="user"]',
+            '[data-testid="user-message"]',
+            '[data-testid*="user-message"]',
+            '[data-testid*="user-turn"]',
+            '[class*="UserMessage"]',
+            '[class*="UserBubble"]',
+            '[class*="user-message"]',
+            '[class*="userMessage"]',
+            '[class*="HumanMessage"]',
+            '[data-role="user"]',
+            '[aria-label="You said"]',
+            '[aria-label="你說"]'
+        ];
+        const isAssistant = el => assistantRoots.some(a => a === el || a.contains(el) || el.contains(a));
+        const excluded = el => !el || !main.contains(el) ||
+            el.closest('nav,aside,header,footer,form,[role="textbox"],#'+PANEL_ID+',#'+BUBBLE_ID) ||
+            el.querySelector('[data-testid*="composer"],textarea,input,[role="textbox"]') ||
+            isAssistant(el);
+        const candidates = [...main.querySelectorAll(selectors.join(','))];
+        // Current ChatGPT often uses a plain whitespace-preserving user text bubble;
+        // accept it ONLY with corroborating user-turn/bubble wrapper evidence.
+        for (const el of main.querySelectorAll('.whitespace-pre-wrap,[class*="whitespace-pre-wrap"]')) {
+            const ancestor = el.closest('[data-testid*="user"],[class*="user-message"],[class*="User"],[class*="Bubble"]');
+            if (ancestor && ancestor !== main && !isAssistant(ancestor)) candidates.push(el);
+        }
+        const out = [];
+        for (const raw of candidates) {
+            let el = raw;
+            if (excluded(el)) continue;
+            // Prefer the user text over any enclosing toolbar, but keep multiline prompts.
+            const text = cleanExportMultiline(el.innerText || el.textContent || '');
+            if (!text || !text.trim()) continue;
+            if (text.length > 15000 || el.querySelector('[class*="DilResponseRoot"]')) continue;
+            if (out.some(prev => prev === el || prev.contains(el))) continue;
+            for (let i=out.length-1; i>=0; i--) if (el.contains(out[i])) out.splice(i,1);
+            out.push(el);
+        }
+        return out;
+    }
+
+    // The source DOM can be virtualized: only report the *loaded, identifiable* turns.
+    // A complete-session command must have at least one verified user question, and
+    // every DIL assistant section must remain in the captured ordered inventory.
+    function diagnoseUnifiedSession() {
+        const blocks = getUnifiedConversationBlocks();
+        const users = blocks.filter(b=>b.role==='user').length;
+        const assistants = blocks.filter(b=>b.role==='assistant').length;
+        const status = {site:getSiteName(),users,assistants,blocks:blocks.length,
+            kinds:blocks.map(b=>b.kind), lengths:blocks.map(b=>b.text.length)};
+        console.info('[AI Prompt Bridge] v1.85 session verification',status);
+        return {blocks,valid:users>0 && assistants>0,status};
+    }
+
+    // v1.84: DOM-grounded, ordered message collection shared by rich and raw exports.
+    // Only accept identifiable message containers. Never silently treat <main> as a session.
+    function getUnifiedConversationBlocks() {
+        const site = getSiteName();
+        if (site !== 'ChatGPT' && site !== 'Gemini') return [];
+        const main = document.querySelector('main') || document.querySelector('[role="main"]');
+        if (!main) return [];
+        const blocks = [];
+        const cleanText = el => cleanExportMultiline(el?.innerText || el?.textContent || '');
+        const add = (role, el, kind) => {
+            if (!el || el.closest?.(`#${PANEL_ID},#${BUBBLE_ID},#ai-prompt-bridge-startup-probe`)) return;
+            const text = cleanText(el);
+            if (!text && !el.querySelector?.('img')) return;
+            blocks.push({role, node:el, text, kind});
+        };
+        if (site === 'ChatGPT') {
+            const roots = [...main.querySelectorAll('[class*="DilResponseRoot"]')]
+                .filter(n => !n.parentElement?.closest?.('[class*="DilResponseRoot"]'));
+            if (roots.length) {
+                roots.forEach(el => add('assistant',el,'dil'));
+                getChatGPTUserBubbles(main, roots).forEach(el=>add('user',el,'user-bubble'));
+            } else {
+                [...main.querySelectorAll('[data-message-author-role]')].forEach(el => {
+                    const role = el.getAttribute('data-message-author-role');
+                    if (role === 'user' || role === 'assistant') add(role,el,'role');
+                });
+                if (!blocks.some(b=>b.role==='user')) getChatGPTUserBubbles(main,[]).forEach(el=>add('user',el,'user-bubble'));
+            }
+        } else {
+            // Prefer actual Gemini message wrappers, not descendant Markdown blocks.
+            const selectors = ['user-query','model-response','[data-testid="user-query"]',
+                '[data-testid="model-response"]'];
+            const wrappers = [...main.querySelectorAll(selectors.join(','))];
+            if (wrappers.length) {
+                wrappers.forEach(el => add(el.matches('user-query,[data-testid="user-query"]') ? 'user' : 'assistant',el,'gemini-turn'));
+            } else {
+                const fallback = [...main.querySelectorAll('message-content, .model-response-text, [data-response-index]')]
+                    .filter(el => !el.parentElement?.closest?.('message-content,.model-response-text,[data-response-index]'));
+                fallback.forEach(el => add('assistant',el,'gemini-response-only'));
+            }
+        }
+        blocks.sort((a,b) => {
+            if (a.node === b.node) return 0;
+            const position = a.node.compareDocumentPosition(b.node);
+            return (position & Node.DOCUMENT_POSITION_FOLLOWING) ? -1 : 1;
+        });
+        const unique = [];
+        for (const item of blocks) {
+            // Suppress only genuine nested duplicates; repeated messages remain distinct.
+            if (unique.some(prev => prev.node === item.node || prev.node.contains(item.node))) continue;
+            unique.push(item);
+        }
+        console.info('[AI Prompt Bridge] v1.84 conversation inventory', {
+            site, blocks:unique.length, roles:unique.map(b=>b.role),
+            lengths:unique.map(b=>b.text.length), kinds:unique.map(b=>b.kind)
+        });
+        return unique;
+    }
+
+    function buildUnifiedSessionTranscript() {
+        const blocks = getUnifiedConversationBlocks();
+        if (!blocks.length) return null;
+        const transcript = document.createElement('div');
+        transcript.setAttribute('data-ai-prompt-bridge-transcript','1');
+        transcript.style.cssText = 'font-family:Microsoft JhengHei,Segoe UI,Arial,sans-serif;font-size:18pt;line-height:1.55;color:#111;max-width:980px;';
+        blocks.forEach((block,index) => {
+            const node = block.node.cloneNode(true);
+            node.querySelectorAll('form,textarea,input,[data-testid*="composer"]').forEach(x=>x.remove());
+            node.querySelectorAll('[contenteditable]').forEach(x=>x.removeAttribute('contenteditable'));
+            const section = document.createElement('section');
+            section.setAttribute('data-ai-prompt-bridge-message',String(index+1));
+            section.setAttribute('data-role',block.role);
+            section.style.cssText = 'margin:0 0 18pt 0;font-size:18pt;line-height:1.55;';
+            if (block.role === 'user') section.style.cssText += 'padding:8pt;background:#f1f5f9;border-radius:8pt;';
+            section.appendChild(node);
+            transcript.appendChild(section);
+        });
+        return {transcript,blocks};
+    }
+
+    function getUnifiedLatestAnswer() {
+        const blocks = getUnifiedConversationBlocks();
+        const latest = [...blocks].reverse().find(b=>b.role==='assistant');
+        if (!latest) return null;
+        const clone = latest.node.cloneNode(true);
+        clone.querySelectorAll('form,textarea,input,[data-testid*="composer"]').forEach(x=>x.remove());
+        clone.querySelectorAll('[contenteditable]').forEach(x=>x.removeAttribute('contenteditable'));
+        clone.setAttribute('data-ai-prompt-bridge-single-answer','1');
+        return {element:clone,source:latest.kind==='dil'?'dil-whole-response':'unified-answer',
+            textLength:latest.text.length,sourceText:latest.text,sourceRoot:latest.node};
+    }
+
     function getCurrentSessionText() {
         const site = getSiteName();
+        if (site === 'ChatGPT' || site === 'Gemini') {
+            const unified = getUnifiedConversationBlocks();
+            if (unified.length) return unified.map(b=>`## ${b.role.toUpperCase()}\n${b.text}`).join('\n\n---\n\n');
+            console.warn('[AI Prompt Bridge] v1.84 no identifiable session blocks; using legacy fallback');
+        }
 
         let structuredContent = "";
         if (site === "ChatGPT") structuredContent = getChatGPTSession();
@@ -3552,12 +3706,18 @@
     async function getAltWRichCopyTargetStable(modeLabel = 'Alt+W') {
         prepareAltWShortcutEnvironment();
         const chatgptHost = /(^|\.)chatgpt\.com$|(^|\.)chat\.openai\.com$/.test(location.hostname);
-        if (!chatgptHost) return getAltWRichCopyTarget();
+        if (!chatgptHost) {
+            if (getSiteName() === 'Gemini') {
+                const unified = getUnifiedLatestAnswer();
+                if (unified) return unified;
+            }
+            return getAltWRichCopyTarget();
+        }
 
         // First use the observed DIL whole response; legacy selectors return zero in this UI.
         if (isLatestChatGPTAnswerReady()) {
-            const dil = getLatestDilAssistantAnswer();
-            if (dil) return dil;
+            const unified = getUnifiedLatestAnswer();
+            if (unified) return unified;
         }
 
         // First use the full ChatGPT turn container (including every Markdown section).
@@ -4814,6 +4974,8 @@
         // 1) Official role DOM if available.
         // 2) Structured DOM blocks preserving p/ol/ul/blockquote/table/pre if role DOM is unavailable.
         // 3) Raw text parser only as the last fallback.
+        const unified = buildUnifiedSessionTranscript();
+        if (unified) return unified.transcript;
         let blocks = getOfficialRoleDomBlocks();
 
         if (blocks.length < 2) {
@@ -4890,6 +5052,13 @@
             }
         } catch (_) {}
 
+        if (['ChatGPT','Gemini'].includes(getSiteName())) {
+            const check = diagnoseUnifiedSession();
+            if (!check.valid) {
+                alert(`Alt+N 無法確認已載入完整對話（User ${check.status.users} / AI ${check.status.assistants}）。未改動剪貼簿。請查看 Console 的 v1.85 session verification；目前仍不能從不存在的 DOM 還原舊訊息。`);
+                return;
+            }
+        }
         const transcript = buildFullSessionTranscriptElement();
         // Do not run cleanOfficeExportElement() on the whole transcript here.
         // Each message clone is already cleaned; transcript-level cleanup strips the user bubble/background styles.
@@ -5801,7 +5970,7 @@ ${body}
             return;
         }
 
-        if (target.source !== "official-whole-turn" && target.source !== "official-content-root" && textContent.length < 250) {
+        if (target.source !== "official-whole-turn" && target.source !== "official-content-root" && target.source !== "unified-answer" && target.source !== "dil-whole-response" && textContent.length < 250) {
             alert(`Alt+Shift+W 偵測到疑似片段輸出（${textContent.length} 字），已阻止複製，避免覆蓋剪貼簿。`);
             return;
         }
@@ -5859,7 +6028,7 @@ ${body}
             return;
         }
 
-        if (target.source !== "official-whole-turn" && target.source !== "official-content-root" && textContent.length < 250) {
+        if (target.source !== "official-whole-turn" && target.source !== "official-content-root" && target.source !== "unified-answer" && target.source !== "dil-whole-response" && textContent.length < 250) {
             alert(`Alt+W 偵測到疑似片段輸出（${textContent.length} 字），已阻止複製，避免覆蓋剪貼簿。`);
             return;
         }
@@ -5925,6 +6094,13 @@ ${body}
     }
 
     async function captureFullSession() {
+        if (['ChatGPT','Gemini'].includes(getSiteName())) {
+            const check = diagnoseUnifiedSession();
+            if (!check.valid) {
+                alert(`Alt+S 無法確認已載入完整對話（User ${check.status.users} / AI ${check.status.assistants}）。未改動剪貼簿。請查看 Console 的 v1.85 session verification。`);
+                return;
+            }
+        }
         const text = getCurrentSessionText();
 
         if (!text || text.length < 20) {
