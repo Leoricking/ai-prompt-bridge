@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AI Prompt Bridge
 // @namespace    https://ai-prompt-bridge.local/ai-prompt-bridge
-// @version      1.85.0
+// @version      1.87.0
 // @description  Cross-AI prompt bridge for ChatGPT, Gemini, Claude, DeepSeek, Qwen, Perplexity and Cursor workflows. Dual Alt+W modes: editable OneNote readable export and Alt+Shift+W ChatGPT visual snapshot.
 // @author       Rossi
 // @match        https://chatgpt.com/*
@@ -30,7 +30,7 @@
 (function () {
     "use strict";
 
-    const AI_PROMPT_BRIDGE_VERSION = "1.85.0";
+    const AI_PROMPT_BRIDGE_VERSION = "1.87.0";
     console.log("[AI Prompt Bridge] injected", AI_PROMPT_BRIDGE_VERSION, location.href);
 
     function showStartupProbe() {
@@ -1135,6 +1135,21 @@
         if (t.length > 12000) return true;
 
         return false;
+    }
+
+    // v1.87: A proven single DIL response is not a whole session just because
+    // it quotes an earlier conversation or contains legacy stale-marker strings.
+    function isVerifiedSingleDilAnswer(target) {
+        if (target?.source !== 'dil-whole-response') return false;
+        const root = target.sourceRoot;
+        const main = document.querySelector('main');
+        if (!root || !main || !main.contains(root) ||
+            !root.matches?.('[class*="DilResponseRoot"]')) return false;
+        if (root.closest?.(`#${PANEL_ID},#${BUBBLE_ID}`)) return false;
+        if (root.querySelector?.('form,textarea,input,[data-testid*="composer"]')) return false;
+        if (root.querySelectorAll?.('[class*="DilResponseRoot"]').length) return false;
+        if (!target.element?.getAttribute?.('data-ai-prompt-bridge-single-answer')) return false;
+        return true;
     }
 
     function isLikelyWholeSessionElement(element) {
@@ -3683,23 +3698,48 @@
                 sourceRoot:root, sourceText:before};
     }
 
-    function validateDilCopyCompleteness(target, exported) {
+    // v1.86: Compare meaningful answer blocks, not a flattened Office text serialization.
+    // A DIL response may include controls, links and rich widgets whose source innerText
+    // differs from plain clipboard text even when its actual answer is still present.
+    function validateDilCopyCompleteness(target, exported, cleanedDomText = '') {
         if (target?.source !== 'dil-whole-response') return true;
-        const expected = cleanExportMultiline(target.sourceText || '');
-        const output = cleanExportMultiline(exported || '');
-        if (!expected || !output) return false;
-        // Compare the beginning and ending rather than enforcing arbitrary char counts.
-        // Use short token chunks to tolerate whitespace and Office formatting differences.
-        const normalize = s => s.replace(/\s+/g,'').replace(/[\u00a0]/g,'');
-        const a=normalize(expected), z=normalize(output);
-        const beginning=a.slice(0, Math.min(24,a.length));
-        const ending=a.slice(-Math.min(24,a.length));
-        const headings = ['自主訓練 A','自主訓練 B','自主訓練 C','教練端最重要的提醒'];
-        const allHeadings = headings.every(h => !expected.includes(h) || output.includes(h));
-        const ok=z.includes(beginning) && z.includes(ending) && z.length >= a.length*0.70 && allHeadings;
-        if (!ok) console.warn('[AI Prompt Bridge] DIL copy integrity failed',{
-            sourceChars:a.length,exportChars:z.length,openingPresent:z.includes(beginning),endingPresent:z.includes(ending)
+        const source = target.sourceRoot;
+        if (!source) return false;
+        const simplify = (s) => String(s || '').replace(/[\s\u00a0\u200b\u200c\u200d]/g, '');
+        const serialized = simplify(exported);
+        const dom = simplify(cleanedDomText);
+        if (!serialized || !dom) return false;
+        // Actual answer blocks are more reliable than comparing the first 24 characters
+        // of the complete renderer (which can contain UI and non-prose widget labels).
+        const tags = 'h1,h2,h3,h4,h5,h6,p,li,blockquote,td,th,pre';
+        const all = Array.from(source.querySelectorAll(tags))
+            .filter(el => !el.closest('button,nav,aside,form,[data-testid*="composer"]'))
+            .map(el => simplify(el.innerText || el.textContent || ''))
+            .filter(t => t.length >= 10);
+        const unique = all.filter((t,i) => all.indexOf(t) === i)
+            .filter(t => !all.some(other => other !== t && other.length > t.length && other.includes(t)));
+        const required = unique.length ? unique : [simplify(source.innerText || source.textContent || '')];
+        // Test distinctive beginning and ending of each prose block, allowing the Office
+        // serializer to insert link URLs and whitespace between pieces of text.
+        const retained = required.filter(t => {
+            const needle = t.slice(0, Math.min(15,t.length));
+            const tail = t.slice(-Math.min(15,t.length));
+            return (serialized.includes(needle) && serialized.includes(tail)) ||
+                   (dom.includes(needle) && dom.includes(tail));
         });
+        const ratio = retained.length / required.length;
+        const firstOK = retained.includes(required[0]);
+        const lastOK = retained.includes(required[required.length - 1]);
+        // The DOM-based check catches missing substantive blocks; no fixed minimum
+        // answer length and no conversation-specific keyword checks.
+        const ok = firstOK && lastOK && ratio >= 0.85;
+        console.info('[AI Prompt Bridge] v1.86 DIL integrity', {
+            sourceBlocks:required.length, retainedBlocks:retained.length,
+            retentionRatio:Number(ratio.toFixed(3)), firstOK, lastOK,
+            plainChars:serialized.length, cleanDomChars:dom.length, result:ok
+        });
+        if (!ok) console.warn('[AI Prompt Bridge] DIL missing answer blocks',
+            required.filter(t => !retained.includes(t)).slice(0,8).map(t => t.slice(0,60)));
         return ok;
     }
 
@@ -5961,7 +6001,7 @@ ${body}
         inlineComputedStylesForSnapshot(target.element, clone);
 
         const textContent = richElementToPlainText(clone);
-        if (!validateDilCopyCompleteness(target, textContent)) {
+        if (!validateDilCopyCompleteness(target, textContent, clone.textContent || "")) {
             alert("Alt+Shift+W：視覺複製內容不完整，已取消複製。");
             return;
         }
@@ -6018,7 +6058,7 @@ ${body}
         cleanOfficeExportElement(clone);
         const textContent = richElementToPlainText(clone);
 
-        if (!validateDilCopyCompleteness(target, textContent)) {
+        if (!validateDilCopyCompleteness(target, textContent, clone.textContent || "")) {
             alert("Alt+W：清理後的回答遺漏開頭、結尾或大量正文；已取消複製，剪貼簿不變。請查看 Console 診斷。");
             return;
         }
@@ -6033,9 +6073,20 @@ ${body}
             return;
         }
 
-        if (target.source !== "selection" && isBadAltWExportText(textContent)) {
-            alert("Alt+W 偵測到候選內容像舊 session / composer 草稿，已停止複製，避免覆蓋剪貼簿。請先點一下目前回答區塊或手動框選後再按 Alt+W。完整 session 請用 Alt+N。");
+        // The legacy text blacklist is only a fallback heuristic. Never apply
+        // historical conversation keywords to an independently verified DIL root.
+        // validateDilCopyCompleteness already checked that substantive blocks survived.
+        if (target.source !== "selection" && !isVerifiedSingleDilAnswer(target) && isBadAltWExportText(textContent)) {
+            console.warn('[AI Prompt Bridge] v1.87 fallback text rejected', {
+                source:target.source, chars:textContent.length
+            });
+            alert("Alt+W 偵測到未驗證候選內容疑似舊 session / composer 草稿，已停止複製；剪貼簿未變更。請查看 Console 診斷。");
             return;
+        }
+        if (isVerifiedSingleDilAnswer(target)) {
+            console.info('[AI Prompt Bridge] v1.87 verified DIL single answer; legacy keyword blacklist bypassed', {
+                sourceChars:target.textLength, exportedChars:textContent.length
+            });
         }
 
         if (target.element?.getAttribute?.("data-ai-prompt-bridge-altw-markdown-root") === "1") {

@@ -1,74 +1,3 @@
-# AI Prompt Bridge v1.85｜使用說明（繁體中文）
-
-AI Prompt Bridge 是支援 ChatGPT、Gemini、Claude、DeepSeek 等網站的 Tampermonkey 使用者腳本，可搬運 AI 回答、產生跨 AI 提示詞，以及將對話匯出為 Word／OneNote 友善格式。
-
-> **版本狀態**：本文件以 v1.85 的預期行為為主；JavaScript 語法檢查不等於實際擷取驗收。ChatGPT 新版 DIL 介面及 Gemini 完整 Session 尚未完成 Opera＋OneNote 實機驗證。若使用者訊息無法辨識，程式可能拒絕匯出，以免把部分對話誤當完整 Session。
->
-> **歷史紀錄**：本檔案保留 v1.71 之前的原始完整 README，歷史章節中的快捷鍵說明及舊字體設定，可能已被新版本取代。請以本頁「目前快捷鍵」為準。
-
-## 目前快捷鍵與用途
-
-| 快捷鍵 | 作用範圍 | 輸出用途 |
-| --- | --- | --- |
-| **Alt+W** | 最新一則 AI 完整回答（不是整段對話） | 可編輯的 Word／OneNote 富文本，預期正文 18pt |
-| **Alt+Shift+W** | 最新一則 AI 完整回答 | 盡量接近畫面配置的視覺富文本 |
-| **Alt+N** | 目前頁面已載入的整個 Session：使用者問題＋AI 回答 | Word／OneNote 富文本 |
-| **Alt+S** | 目前頁面已載入的整個 Session：使用者問題＋AI 回答 | 原始純文字 |
-| **Alt+C** | 選取文字或最近回答 | 暫存並複製文字，供其他 AI 使用 |
-| **Alt+V** | 將暫存內容轉為 Cursor 修正提示詞 | 貼給 ChatGPT／Cursor 使用 |
-| **Alt+B／Alt+R** | 腳本面板 | 隱藏／顯示；重置位置 |
-
-### ChatGPT 與 Gemini 操作方式
-
-1. 開啟目標聊天。想保存**最新 AI 回答**，按 `Alt+W`，切換至 OneNote 後貼上；想保存**整個聊天 Session**，按 `Alt+N`（富文本）或 `Alt+S`（純文字）。
-2. 對話過長時，先向上捲動使歷史內容載入；腳本只能擷取網頁當下已渲染或可辨識的內容，無法保證取得未載入的歷史訊息。
-3. 當出現「無法確認使用者問題是否完整載入」時，代表安全檢查拒絕複製，**不是已成功備份**。此時可在 DevTools Console 查看 `[AI Prompt Bridge]` 診斷資訊。
-4. ChatGPT 使用 DIL 介面時，Alt+W 優先使用 `DilResponseRoot` 整個回答容器，而非只抓最後一段；Gemini 仍須在實際頁面驗證選擇器與完整性。
-5. 對表格、程式碼、Writing Block、圖片和 OneNote 字型，均須檢查貼上結果；瀏覽器複製成功不保證 Office 保留全部樣式。
-
-## 安裝或更新
-
-1. 在 Tampermonkey 匯出備份目前版本。
-2. 將 `ai-prompt-bridge.user.js` 完整內容貼入既有腳本並儲存，不要與舊版本同時啟用。
-3. 重新整理 ChatGPT／Gemini 分頁；必要時在 Opera 擴充功能設定確認 Tampermonkey 有網站存取權及使用者腳本權限。
-4. 確認腳本標頭 `@version` 及內部 `AI_PROMPT_BRIDGE_VERSION` 均為 `1.85.0`。
-
-## v1.83～v1.85 更新摘要
-
-### v1.83 — ChatGPT DIL 完整回答擷取
-
-- 根據 Opera DOM 診斷，優先擷取包含開頭、課表 A／B／C、結尾的整個 `DilResponseRoot`。
-- 保留回答內部 Writing Block 的可見正文，不將它直接視為輸入框刪除。
-- 在匯出前比較前後文字與標題；若懷疑清理造成漏段，停止複製並記錄診斷。
-- 其他快捷鍵原則上保留既有行為，**不代表已通過新介面回歸驗證**。
-
-### v1.84 — ChatGPT／Gemini 擷取來源整合
-
-- 對最新回答與完整 Session 增加共用蒐集／檢查邏輯；完整 Session 應按畫面順序涵蓋 User 與 AI。
-- 若 DOM 只能辨識 AI 回答，卻無法確認 User 訊息，Alt+N／Alt+S 可能拒絕匯出，避免顯示假成功。
-- Gemini 使用既有容器辨識及 fallback；尚未從使用者的實際 Gemini DOM 完成驗證。
-
-### v1.85 — ChatGPT 使用者訊息（User Bubble）辨識
-
-- 改進 ChatGPT 使用者問題容器的偵測，嘗試支援不同世代的 role／testid／class 標記。
-- 避免將回答內的 Writing Block、Sidebar、Composer 誤認成 User 訊息。
-- Alt+N 與 Alt+S 共用 Session 訊息清單，盡量維持原始順序及避免重複擷取。
-- 若無法確認完整對話，仍會拒絕覆寫剪貼簿；**並未保證所有網頁或所有歷史訊息可完整擷取**。
-- Alt+W、Alt+Shift+W、Alt+C、Alt+V、Review、Panel 等沿用既有功能。
-
-## 發布前驗收清單
-
-- [ ] ChatGPT Alt+W：從第一段到最後一段完整，無其他對話混入。
-- [ ] ChatGPT Alt+N：每一個已載入的 User 問句與 AI 回答都按順序出現。
-- [ ] ChatGPT Alt+S：與 Alt+N 同一份訊息順序，格式改成純文字。
-- [ ] Gemini Alt+W／Alt+N／Alt+S：分別核對最新回答與整段對話。
-- [ ] OneNote：18pt 正文、標題、清單、表格、程式碼換行、Writing Block 已檢查。
-- [ ] Alt+C／Alt+V／Alt+B／Alt+R、Panel、Review、Project Context 未回歸。
-- [ ] `node --check ai-prompt-bridge.user.js`、`git diff --check` 與實機貼上測試通過後再提交。
-
----
-
-# 原版 README 歷史紀錄（保留原文，版本截至 v1.71）
 # AI Prompt Bridge v1.71
 
 AI Prompt Bridge 是一個 Tampermonkey userscript，用來在 ChatGPT、Gemini、Claude、DeepSeek、Perplexity、Qwen、Cursor 等頁面之間快速搬運內容、生成 review prompt、生成 Cursor fix prompt、整理筆記，以及複製 Word / OneNote 可用的乾淨富文本。
@@ -2989,3 +2918,49 @@ git commit -m "fix: hide Office grid lines in Alt+W code blocks" -m "- Base the 
 - Preserve line breaks, arrows, indentation, and the v1.63 highlight-leakage fix.
 - Keep Alt+N, Alt+S, Cursor, Review, Panel, and Project Context unchanged."
 ```
+
+---
+
+## v1.83 - DIL Whole Reply Extraction
+
+### Fixes
+- Prefer complete ChatGPT DilResponseRoot reply containers.
+- Avoid copying only the last Markdown or table fragment.
+- Preserve response-owned Writing Block content.
+- Validate opening, ending and major headings.
+- Reject incomplete exports instead of reporting false success.
+
+### Preserved
+- Alt+W: OneNote readable export, 18pt body text.
+- Alt+Shift+W: ChatGPT visual export.
+- Alt+N: Full-session rich export.
+- Alt+S: Full-session raw text.
+- Alt+V, Cursor, Review, Panel and Project Context.
+
+### Validation
+- JavaScript syntax validation required before commit.
+- Opera/OneNote end-to-end validation remains pending.
+
+---
+
+## v1.85：完整 Session 擷取改善
+
+- 改善 ChatGPT 使用者問題 DOM 辨識。
+- Alt+N 與 Alt+S 共用 Session 擷取與檢查。
+- 無法確認完整性時停止複製。
+
+## v1.86：DIL 完整性驗證改善
+
+- 改善 Office 文字轉換與正文比對。
+- 避免格式差異被誤判成漏段。
+
+## v1.87：Alt+W 誤判修正
+
+- 修正正常 DIL 回答被舊版文字黑名單誤擋。
+- 保留回答完整性驗證。
+- 其他快捷鍵維持既有功能。
+
+### 驗證狀態
+
+- 程式語法檢查完成。
+- Opera / OneNote 實機測試仍待確認。
