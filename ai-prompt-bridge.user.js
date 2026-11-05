@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AI Prompt Bridge
 // @namespace    https://ai-prompt-bridge.local/ai-prompt-bridge
-// @version      1.87.0
+// @version      1.94.0
 // @description  Cross-AI prompt bridge for ChatGPT, Gemini, Claude, DeepSeek, Qwen, Perplexity and Cursor workflows. Dual Alt+W modes: editable OneNote readable export and Alt+Shift+W ChatGPT visual snapshot.
 // @author       Rossi
 // @match        https://chatgpt.com/*
@@ -30,7 +30,7 @@
 (function () {
     "use strict";
 
-    const AI_PROMPT_BRIDGE_VERSION = "1.87.0";
+    const AI_PROMPT_BRIDGE_VERSION = "1.94.0";
     console.log("[AI Prompt Bridge] injected", AI_PROMPT_BRIDGE_VERSION, location.href);
 
     function showStartupProbe() {
@@ -577,7 +577,7 @@
             // Prefer the user text over any enclosing toolbar, but keep multiline prompts.
             const text = cleanExportMultiline(el.innerText || el.textContent || '');
             if (!text || !text.trim()) continue;
-            if (text.length > 15000 || el.querySelector('[class*="DilResponseRoot"]')) continue;
+            if (el.querySelector('[class*="DilResponseRoot"]')) continue;
             if (out.some(prev => prev === el || prev.contains(el))) continue;
             for (let i=out.length-1; i>=0; i--) if (el.contains(out[i])) out.splice(i,1);
             out.push(el);
@@ -600,9 +600,76 @@
 
     // v1.84: DOM-grounded, ordered message collection shared by rich and raw exports.
     // Only accept identifiable message containers. Never silently treat <main> as a session.
+    // v1.94: One inventory for both shortcuts. Clip DOM by user boundaries BEFORE
+    // accepting renderer roots: a DilResponseRoot can wrap the entire session.
+    function collectChatGPTBoundedTurns() {
+        const main = document.querySelector('main,[role="main"]');
+        if (!main) return [];
+        const users = getChatGPTUserBubbles(main, []).sort((a,b) =>
+            a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1);
+        const answerSelector = '[data-message-author-role="assistant"],[data-testid*="assistant-message"],'+
+            '[class*="DilResponseRoot"],[class*="MarkdownRoot"],.markdown,.prose';
+        const blocks = [];
+        const append = (role,node,anchor) => {
+            const text = cleanExportMultiline(node.innerText || node.textContent || '');
+            if (text || node.querySelector('img')) blocks.push({role,node,text,kind:'bounded-turn',anchor});
+        };
+        const extract = (range,anchor) => {
+            const clipped = document.createElement('div');
+            clipped.appendChild(range.cloneContents());
+            clipped.querySelectorAll('nav,aside,form,textarea,input,button,script,style,'+
+                '[data-testid*="composer"],#'+PANEL_ID+',#'+BUBBLE_ID).forEach(n=>n.remove());
+            // Keep outermost answer containers only AFTER clipping, so sibling
+            // Markdown parts, tables and Writing Blocks survive as one answer.
+            let roots = [...clipped.querySelectorAll(answerSelector)];
+            roots = roots.filter(n=>!roots.some(p=>p!==n && p.contains(n)));
+            if (!roots.length) return;
+            const plain = n => (n.textContent || '').replace(/\s/g,'');
+            const answer = roots.length === 1 && plain(roots[0]) === plain(clipped) ? roots[0] : clipped;
+            answer.querySelectorAll('[contenteditable]').forEach(n=>n.removeAttribute('contenteditable'));
+            answer.setAttribute('data-ai-prompt-bridge-single-answer','1');
+            answer.setAttribute('data-ai-prompt-bridge-altw-structured','1');
+            append('assistant',answer,anchor);
+        };
+        if (!users.length) {
+            // Without a user boundary, only explicit assistant message roots
+            // establish distinct replies. A renderer class alone proves nothing.
+            const explicit = [...main.querySelectorAll('[data-message-author-role="assistant"],[data-testid*="assistant-message"]')];
+            explicit.filter(n=>!explicit.some(p=>p!==n && p.contains(n))).forEach(n=>{
+                const range = document.createRange(); range.selectNode(n); extract(range,n);
+            });
+            return blocks;
+        }
+        // Include an already loaded answer whose earlier user turn is virtualized.
+        const leading = document.createRange();
+        leading.selectNodeContents(main);
+        if (users.length) leading.setEndBefore(users[0]);
+        extract(leading,main);
+        users.forEach((user,i)=>{
+            append('user',user,user);
+            const range = document.createRange();
+            range.selectNodeContents(main);
+            range.setStartAfter(user);
+            if (users[i+1]) range.setEndBefore(users[i+1]);
+            extract(range,user);
+        });
+        return blocks;
+    }
+
+    function getBoundedLatestChatGPTAnswer() {
+        const blocks = collectChatGPTBoundedTurns();
+        const latest = blocks[blocks.length-1];
+        // A newly submitted unanswered user prompt must not copy an older reply.
+        if (!latest || latest.role !== 'assistant') return null;
+        return {element:latest.node.cloneNode(true), source:'unified-answer',
+            sourceRoot:latest.node, sourceText:latest.text, textLength:latest.text.length,
+            boundedTurn:true};
+    }
+
     function getUnifiedConversationBlocks() {
         const site = getSiteName();
-        if (site !== 'ChatGPT' && site !== 'Gemini') return [];
+        if (site === 'ChatGPT') return collectChatGPTBoundedTurns();
+        if (site !== 'Gemini') return [];
         const main = document.querySelector('main') || document.querySelector('[role="main"]');
         if (!main) return [];
         const blocks = [];
@@ -678,7 +745,52 @@
         return {transcript,blocks};
     }
 
+    // v1.93: Alt+W is STRICTLY one assistant response. Do not trust the
+    // shared full-session inventory or a class name on a broad ancestor.
+    // Never promote an outer response/session container to a verified answer.
+    function getStrictChatGPTLatestDilTarget() {
+        const main = document.querySelector('main') || document.querySelector('[role="main"]');
+        if (!main) return null;
+        const roots = Array.from(main.querySelectorAll('[class*="DilResponseRoot"]'))
+            .filter(el => !el.parentElement?.closest?.('[class*="DilResponseRoot"]'))
+            .filter(el => !el.closest?.(`#${PANEL_ID},#${BUBBLE_ID}`));
+        if (!roots.length) return null;
+        const root = roots[roots.length - 1];
+        const forbidden = '[data-message-author-role="user"],[data-testid*="user-message"],'+
+            '[data-testid*="user-turn"],[class*="UserMessage"],'+
+            '[class*="UserBubble"],[class*="user-message"],'+
+            '[class*="HumanMessage"],[data-role="user"]';
+        const users = getChatGPTUserBubbles(main, roots);
+        const lastUser = users[users.length - 1];
+        const afterUser = !lastUser || Boolean(lastUser.compareDocumentPosition(root) & Node.DOCUMENT_POSITION_FOLLOWING);
+        // A nested response root, a user bubble, a composer, or more than one
+        // explicit assistant turn means this is not an isolated single answer.
+        const assistantTurns = root.querySelectorAll('[data-message-author-role="assistant"],'+
+            '[data-testid*="assistant-message"],[data-testid*="conversation-turn"]');
+        const valid = afterUser && !root.matches(forbidden) &&
+            !root.querySelector(forbidden) &&
+            !root.querySelector('[class*="DilResponseRoot"],form,textarea,input,[data-testid*="composer"]') &&
+            assistantTurns.length <= 1;
+        if (!valid) {
+            console.warn('[AI Prompt Bridge] v1.93 Alt+W refused mixed-turn DIL root', {
+                roots:roots.length, afterUser, assistantTurns:assistantTurns.length,
+                containsUser:!!root.querySelector(forbidden), length:(root.textContent||'').length
+            });
+            return null;
+        }
+        const text = cleanExportMultiline(root.innerText || root.textContent || '');
+        if (!text) return null;
+        const clone = root.cloneNode(true);
+        clone.querySelectorAll('[contenteditable]').forEach(el => el.removeAttribute('contenteditable'));
+        clone.setAttribute('data-ai-prompt-bridge-single-answer','1');
+        clone.setAttribute('data-ai-prompt-bridge-dil-whole','1');
+        clone.setAttribute('data-ai-prompt-bridge-altw-structured','1');
+        return {element:clone,source:'dil-whole-response',sourceRoot:root,
+            sourceText:text,textLength:text.length};
+    }
+
     function getUnifiedLatestAnswer() {
+        if (getSiteName() === 'ChatGPT') return getStrictChatGPTLatestDilTarget();
         const blocks = getUnifiedConversationBlocks();
         const latest = [...blocks].reverse().find(b=>b.role==='assistant');
         if (!latest) return null;
@@ -1148,6 +1260,10 @@
         if (root.closest?.(`#${PANEL_ID},#${BUBBLE_ID}`)) return false;
         if (root.querySelector?.('form,textarea,input,[data-testid*="composer"]')) return false;
         if (root.querySelectorAll?.('[class*="DilResponseRoot"]').length) return false;
+        if (root.querySelector?.('[data-message-author-role="user"],[data-testid*="user-message"],'+
+            '[class*="UserMessage"],[class*="UserBubble"],[class*="user-message"]')) return false;
+        if (root.querySelectorAll?.('[data-message-author-role="assistant"],'+
+            '[data-testid*="assistant-message"],[data-testid*="conversation-turn"]').length > 1) return false;
         if (!target.element?.getAttribute?.('data-ai-prompt-bridge-single-answer')) return false;
         return true;
     }
@@ -3754,48 +3870,8 @@
             return getAltWRichCopyTarget();
         }
 
-        // First use the observed DIL whole response; legacy selectors return zero in this UI.
-        if (isLatestChatGPTAnswerReady()) {
-            const unified = getUnifiedLatestAnswer();
-            if (unified) return unified;
-        }
-
-        // First use the full ChatGPT turn container (including every Markdown section).
-        // Do not rely on viewport, selection, last table, or the longest arbitrary node.
-        if (isLatestChatGPTAnswerReady()) {
-            const whole = getAltWWholeConversationTurn();
-            if (whole) return whole;
-        }
-
-        // Rendered assistant nodes may lack role attributes, especially in Projects.
-        // A finished answer should copy immediately; don't show a "waiting" toast.
-        for (let attempt = 0; attempt < 5; attempt += 1) {
-            const official = getVerifiedLatestAssistantTurn();
-            const ready = isLatestChatGPTAnswerReady();
-            if (official && ready) {
-                // Compare against independent extractors to detect truncated official DOM.
-                const alternative = getAltWFallbackWithoutRoleMarkers();
-                if (alternative && alternative.textLength > official.textLength * 1.4 &&
-                    alternative.textLength - official.textLength > 300) {
-                    console.info('[AI Prompt Bridge] using fuller last-turn candidate',
-                        {official: official.textLength, alternate: alternative.textLength, source: alternative.source});
-                    return alternative;
-                }
-                return official;
-            }
-            if (ready) {
-                const fallback = getAltWFallbackWithoutRoleMarkers();
-                if (fallback) return fallback;
-            }
-            if (attempt < 4) await new Promise(resolve => setTimeout(resolve, 250));
-        }
-        // No clipboard mutation on unresolved/streaming answers.
-        console.warn('[AI Prompt Bridge] latest answer unavailable', {
-            mode: modeLabel,
-            roleMarkers: document.querySelectorAll('[data-message-author-role]').length,
-            generating: !isLatestChatGPTAnswerReady()
-        });
-        return null;
+        if (!isLatestChatGPTAnswerReady()) return null;
+        return getBoundedLatestChatGPTAnswer();
     }
 
     function getSelectionHtml() {
@@ -5385,11 +5461,13 @@
 
 
     function normalizeExportCodeText(rawText) {
+        // Preserve the source's actual line breaks.  An arrow is inline prose
+        // unless the rendered block already contains a real line boundary.
+        // Earlier releases inserted newlines around every arrow, breaking
+        // "長 → 短，不要 50 → 100 → 200 → 400" in OneNote.
         let normalized = safeText(rawText)
-            .replace(/\r\n/g, "\n")
-            .replace(/\u00a0/g, " ")
-            .replace(/[ \t]*↓[ \t]*/g, "\n↓\n")
-            .replace(/[ \t]*→[ \t]*/g, "\n→\n");
+            .replace(/\r\n?/g, "\n")
+            .replace(/\u00a0/g, " ");
 
         const lines = normalized
             .split("\n")
@@ -5415,26 +5493,23 @@
         const hasLanguageLabel =
             /(^|\n|\s)(純文字|plaintext|text|bash|powershell|python|javascript|json|yaml|markdown)(\s|\n|$)/i.test(text);
 
+        // Arrows and copy buttons alone are not code-block evidence: a
+        // normal ChatGPT paragraph may contain several arrows, and the
+        // outer response also contains copy controls.
         const hasCodeSignals =
-            text.includes("↓") ||
-            text.includes("→") ||
-            text.includes("=>") ||
-            text.includes("->") ||
-            text.includes("git ") ||
-            text.includes("python ") ||
-            text.includes("sqlite") ||
-            text.includes("import ") ||
-            text.includes("function ") ||
-            text.includes("{") ||
-            text.includes("}") ||
-            text.split("\n").length >= 4;
+            /(?:^|\n)\s*(?:[$#>]\s|[A-Za-z_][\w-]*\s*[=:]\s*\S)/m.test(text) ||
+            /(?:^|\n)\s*(?:git|python|pip|npm|import|function)\s+\S/m.test(text) ||
+            /[├└]──|(?:^|\n)\s*[│|]\s*[├└]/u.test(text) ||
+            /\S[ \t]{3,}\S/.test(text) ||
+            /[{};]/.test(text);
 
-        const hasCopyButton = Boolean(
-            element.querySelector("button,svg,[aria-label*='Copy'],[aria-label*='複製'],[data-testid*='copy']")
-        );
-
-        const manyArrowLines = (text.match(/↓/g) || []).length >= 2 || (text.match(/→/g) || []).length >= 2;
-        return (hasLanguageLabel && (hasCodeSignals || hasCopyButton)) || (hasCopyButton && manyArrowLines);
+        // Require a clearly labelled code block and actual code structure.
+        // The label must be local rather than somewhere in a long answer.
+        const hasCopyButton = Boolean(element.querySelector(
+            "button[aria-label*='Copy'],button[aria-label*='複製'],[data-testid*='copy']"
+        ));
+        const compact = text.length <= 3500 && text.split("\n").length <= 110;
+        return compact && hasLanguageLabel && (hasCodeSignals || hasCopyButton);
     }
 
     function convertRenderedCodeBlocksToPre(root) {
@@ -5442,7 +5517,7 @@
             if (!root || !root.querySelectorAll) return root;
 
             const candidates = Array.from(root.querySelectorAll("div"))
-                .filter((node) => looksLikeRenderedCodeBlock(node))
+                .filter((node) => !node.querySelector('pre,table,ul,ol,h1,h2,h3,h4,h5,h6') && looksLikeRenderedCodeBlock(node))
                 .sort((a, b) => {
                     // Convert smaller/nested blocks first; skip parents that contain converted children.
                     const aDepth = getElementDepth(a);
@@ -5808,6 +5883,7 @@ body,.ai-prompt-bridge-onenote-readable {font-family:"Microsoft JhengHei","Noto 
 .ai-prompt-bridge-onenote-readable th,.ai-prompt-bridge-onenote-readable td {border-bottom:1px solid #e5e7eb;padding:5pt 7pt;vertical-align:top;}
 .ai-prompt-bridge-onenote-readable [data-ai-prompt-bridge-codeblock="1"] {background:#f3f4f6;border:0;}
 .ai-prompt-bridge-onenote-readable [data-ai-prompt-bridge-codeblock-cell="1"] {background:#f3f4f6;border:0;}
+.ai-prompt-bridge-onenote-readable [data-ai-prompt-bridge-onenote-lines="1"] td {white-space:nowrap;font:11pt Consolas,"Courier New",monospace;border:0!important;word-break:normal;overflow-wrap:normal;}
 </style></head><body><div class="ai-prompt-bridge-onenote-readable" style="font-family:'Microsoft JhengHei','Noto Sans TC',Arial,sans-serif;font-size:18pt;line-height:1.55;color:#111111;background-color:#ffffff;">${body}</div></body></html>`;
     }
 
@@ -5920,7 +5996,7 @@ ${body}
             root.querySelectorAll('[data-ai-prompt-bridge-codeblock-cell="1"]').forEach(cell => {
                 cell.style.backgroundColor="#f3f4f6";
                 cell.style.border="0";
-                cell.style.setProperty("font-size","16pt","important");
+                cell.style.setProperty("font-size","11pt","important");
             });
         } catch (error) { console.warn("[AI Prompt Bridge] readable style failed", error); }
     }
@@ -5985,7 +6061,7 @@ ${body}
             alert("Alt+Shift+W 尚未找到可確認屬於最新回合的完整回答；未改動剪貼簿。請檢查 Console 的 [AI Prompt Bridge] 診斷訊息。");
             return;
         }
-        if (isAltWMissingEarlierVisibleAnswer(target)) {
+        if (!target.boundedTurn && isAltWMissingEarlierVisibleAnswer(target)) {
             alert("Alt+Shift+W 偵測到最新回答前段遺漏，已取消複製以避免漏段。");
             return;
         }
@@ -6035,6 +6111,204 @@ ${body}
         await copyText(textContent, `Alt+Shift+W 已降級複製純文字（${textContent.length} 字）`);
     }
 
+    // v1.91: A PRE is not proof that its contents are source code. Earlier
+    // versions converted every PRE into an Office TABLE, which turned ordinary
+    // sentences into grid-lined rows. Convert only verified tree/CLI layouts.
+    // Use line DIVs with NBSP indentation, not a TABLE; Office may draw gridlines
+    // even when border=0. Leave unrelated PRE blocks completely untouched.
+    function preserveAltWCodeBlocksForOneNote(root) {
+        if (!root?.querySelectorAll) return 0;
+        let converted = 0;
+        for (const pre of Array.from(root.querySelectorAll('pre'))) {
+            if (!root.contains(pre) || pre.closest('table,li') ||
+                pre.querySelector('table,p,li,ul,ol,h1,h2,h3,h4,h5,h6')) continue;
+            const raw = String(pre.textContent || '').replace(/\r\n?/g, '\n').replace(/^\n|\n$/g, '');
+            const lines = raw.split('\n');
+            if (lines.length < 2 || lines.length > 150 || raw.length > 12000) continue;
+            const treeLines = lines.filter(line => /^\s*[│| ]*[├└][─━]{1,}/u.test(line)).length;
+            const columns = lines.filter(line => /\S[ \t]{3,}\S/.test(line)).length;
+            const cliLines = lines.filter(line => /^(?:\s*[$#>]\s|\s*(?:[A-Z_]+)=|\s*(?:[0-9a-f]{4}:){2,})/i.test(line)).length;
+            const looksLikeTree = treeLines >= 2;
+            const looksLikeAlignedCli = lines.length >= 3 && columns >= 3 &&
+                columns >= Math.ceil(lines.filter(x=>x.trim()).length * 0.5);
+            const looksLikeCli = cliLines >= 3 && cliLines >= Math.ceil(lines.length * 0.5);
+            if (!looksLikeTree && !looksLikeAlignedCli && !looksLikeCli) continue;
+
+            const block = document.createElement('div');
+            block.setAttribute('data-ai-prompt-bridge-fixed-lines', '1');
+            block.style.cssText = 'display:block;background:#eeeeee;padding:7pt 9pt;'+
+                'margin:8pt 0 12pt;font:11pt/1.4 Consolas,"Cascadia Mono",'+
+                '"Courier New",monospace;color:#171717;border:0;';
+            for (const line of lines) {
+                const row = document.createElement('div');
+                row.setAttribute('data-ai-prompt-bridge-fixed-line','1');
+                row.style.cssText='display:block;white-space:pre;'+
+                    'font:11pt/1.4 Consolas,"Cascadia Mono","Courier New",monospace;';
+                // Expand tabs to tab stops. NBSP preserves ASCII-tree whitespace.
+                let value = '', col = 0;
+                for (const char of line) {
+                    if (char === '\t') {
+                        const n = 4 - col % 4; value += ' '.repeat(n); col += n;
+                    } else { value += char; col++; }
+                }
+                row.textContent = (value || ' ').replace(/ /g, '\u00a0');
+                block.appendChild(row);
+            }
+            pre.replaceWith(block);
+            converted++;
+        }
+        return converted;
+    }
+
+    // v1.89: Some DIL code-looking blocks are rendered as nested div/span rather
+    // than PRE.  Detect only containers with multiple directory-tree branches.
+    // Convert them to PRE before the tested v1.88 per-line Office table path.
+    function promoteAltWRenderedTreeBlocks(root) {
+        if (!root?.querySelectorAll) return 0;
+        const candidates = Array.from(root.querySelectorAll('div,section,article'))
+            .filter(n => !n.closest('pre,table,[data-ai-prompt-bridge-codeblock="1"]'))
+            .sort((a,b) => getElementDepth(b) - getElementDepth(a));
+        let count = 0;
+        for (const node of candidates) {
+            if (!root.contains(node) || node.querySelector('pre,table,[data-ai-prompt-bridge-codeblock="1"]')) continue;
+            const raw = extractRenderedCodeTextWithBreaks(node).replace(/\r\n?/g,'\n');
+            if (raw.length < 30 || raw.length > 4500) continue;
+            const lines = raw.split('\n');
+            const branches = lines.filter(line => /^\s*[│| ]*[├└][─━]{1,}/u.test(line));
+            if (branches.length < 2 || lines.length > 110) continue;
+            // Never flatten an outer DIL answer or a parent spanning prose and cards.
+            const nonEmpty = lines.filter(x => x.trim());
+            if (nonEmpty.length > branches.length + 14) continue;
+            const pre = document.createElement('pre');
+            pre.setAttribute('data-ai-prompt-bridge-codeblock','1');
+            pre.setAttribute('data-ai-prompt-bridge-tree','1');
+            pre.textContent = raw.replace(/^\n+|\n+$/g,'');
+            node.replaceWith(pre);
+            count++;
+        }
+        return count;
+    }
+
+    // v1.89: DIL card titles are often DIV/SPAN nodes, not H3.  Promote only
+    // exact compact Phase headings, leaving all descriptions inside their cards.
+    // Section borders and spacing survive OneNote better than CSS class rules.
+    function preserveAltWPhaseSections(root) {
+        if (!root?.querySelectorAll) return 0;
+        const phaseRe = /^Phase\s+([1-9]\d?)\s*[:：\-–]?\s*\S+/i;
+        const headings = Array.from(root.querySelectorAll('div,span,p,strong,b,h1,h2,h3,h4,h5,h6'))
+            .filter(n => root.contains(n) && !n.closest('pre,table,[data-ai-prompt-bridge-codeblock="1"]'))
+            .filter(n => {
+                const t = (n.textContent || '').trim();
+                if (t.length < 12 || t.length > 140 || !phaseRe.test(t) || /\n/.test(t)) return false;
+                return !Array.from(n.children).some(c => phaseRe.test((c.textContent || '').trim()));
+            });
+        let count = 0;
+        const decorated = new Set();
+        for (const original of headings) {
+            if (!root.contains(original)) continue;
+            const label = (original.textContent || '').trim();
+            const match = label.match(phaseRe);
+            if (!match) continue;
+            // Find the smallest existing card encompassing a title and its description,
+            // without grabbing another Phase or another unrelated section.
+            let card = original.parentElement, chosen = null;
+            for (let level=0; card && card !== root && level < 6; level++, card=card.parentElement) {
+                const all = card.textContent || '';
+                const phaseCount = (all.match(/Phase\s+[1-9]\d?\s*[:：\-–]?/gi) || []).length;
+                if (phaseCount !== 1 || all.length > 1700) break;
+                if (all.length >= label.length + 35 && card.children.length >= 2) chosen = card;
+            }
+            if (!chosen || decorated.has(chosen)) continue;
+            decorated.add(chosen);
+            chosen.setAttribute('data-ai-prompt-bridge-phase-section','1');
+            chosen.style.setProperty('display','block','important');
+            chosen.style.setProperty('margin','12pt 0 14pt','important');
+            chosen.style.setProperty('padding','9pt 0 12pt','important');
+            chosen.style.setProperty('border-bottom','1px solid #d1d5db','important');
+            // Retain heading's inline descendants (if any) and text nodes, but
+            // use a proper block-level heading to prevent OneNote inline flattening.
+            let heading = original;
+            if (!/^H[1-6]$/.test(original.tagName)) {
+                heading = document.createElement('h3');
+                while (original.firstChild) heading.appendChild(original.firstChild);
+                original.replaceWith(heading);
+            }
+            heading.setAttribute('data-ai-prompt-bridge-phase-title','1');
+            heading.style.cssText = 'display:block;font-family:"Microsoft JhengHei","Segoe UI",Arial,sans-serif;font-size:18pt;font-weight:700;line-height:1.4;margin:0 0 7pt 0;color:#111111;';
+            count++;
+        }
+        return count;
+    }
+
+    // v1.90: DIL sometimes represents inline prose fragments as nested DIVs.
+    // Office interprets those DIVs as separate paragraphs (e.g. every arrow
+    // in "long -> short, not 50 -> 100 -> 200 -> 400" becomes its own line).
+    // Flatten ONLY small, arrow-linked prose runs.  Never touch real sections,
+    // lists, headings, tables, code/pre, or explicit BR paragraph breaks.
+    function preserveAltWInlineArrowProse(root) {
+        if (!root?.querySelectorAll) return 0;
+        const blocked = 'pre,code,table,ul,ol,h1,h2,h3,h4,h5,h6,hr,br';
+        const candidates = Array.from(root.querySelectorAll('p,li,blockquote,div,section'))
+            .sort((a,b) => getElementDepth(b) - getElementDepth(a));
+        let fixed = 0;
+        for (const candidate of candidates) {
+            if (!root.contains(candidate) ||
+                candidate.closest('pre,code,table,[data-ai-prompt-bridge-codeblock="1"],'+
+                    '[data-ai-prompt-bridge-phase-section="1"]')) continue;
+            if (candidate.querySelector(blocked) || candidate.querySelector('li,blockquote')) continue;
+            const raw = (candidate.textContent || '').trim();
+            const arrows = (raw.match(/[→➜➝⇒]/g) || []).length;
+            if (arrows < 2 || raw.length < 12 || raw.length > 450) continue;
+
+            // A prose run must have multiple short inline-like fragments, not
+            // a surrounding DIL response container with separate paragraphs.
+            const fragments = Array.from(candidate.children || []);
+            if (fragments.length < 2 || fragments.length > 24) continue;
+            if (!fragments.every(child =>
+                ['DIV','SPAN','SECTION','STRONG','B','EM','I','A','SMALL'].includes(child.tagName) &&
+                !child.querySelector(blocked + ',p,li,blockquote,article')
+            )) continue;
+
+            // Replace rendered block wrappers with real SPAN elements: setting
+            // display:inline on DIV alone does not survive OneNote HTML import.
+            const wrappers = Array.from(candidate.querySelectorAll('div,section'))
+                .filter(n => !n.querySelector(blocked + ',p,li,blockquote,article'))
+                .sort((a,b) => getElementDepth(b) - getElementDepth(a));
+            if (!wrappers.length) continue;
+            for (const wrapper of wrappers) {
+                if (!candidate.contains(wrapper)) continue;
+                const span = document.createElement('span');
+                span.style.cssText = 'display:inline;font:inherit;color:inherit;'+
+                    'white-space:normal;vertical-align:baseline;margin:0;padding:0;';
+                while (wrapper.firstChild) span.appendChild(wrapper.firstChild);
+                wrapper.replaceWith(span);
+            }
+
+            // Keep semantic LI/P/BLOCKQUOTE intact. Only upgrade a nonsemantic
+            // DIV/SECTION holding the prose into a single true paragraph.
+            if (candidate.tagName === 'DIV' || candidate.tagName === 'SECTION') {
+                const paragraph = document.createElement('p');
+                paragraph.style.cssText = 'display:block;margin:6pt 0 10pt;'+
+                    'line-height:1.55;white-space:normal;';
+                while (candidate.firstChild) paragraph.appendChild(candidate.firstChild);
+                candidate.replaceWith(paragraph);
+            }
+            fixed++;
+        }
+        return fixed;
+    }
+
+    // Only inspect export DOM after conversion; never weaken the pre-existing
+    // DIL completeness check.  If significant content disappears, do not copy.
+    function validateAltWStructuredConversion(before, root) {
+        const canonical = s => String(s || '').replace(/[\s\u00a0\u200b]+/g,'');
+        const a = canonical(before);
+        const b = canonical(root?.textContent || '');
+        return !!a && !!b && b.length >= a.length * 0.95 &&
+            b.includes(a.slice(0,Math.min(32,a.length))) &&
+            b.includes(a.slice(-Math.min(32,a.length)));
+    }
+
     async function copyRichTextForOffice() {
         const target = await getAltWRichCopyTargetStable("Alt+W");
 
@@ -6042,7 +6316,7 @@ ${body}
             alert("Alt+W 尚未找到可確認屬於最新回合的完整回答；未改動剪貼簿。請檢查 Console 的 [AI Prompt Bridge] 診斷訊息。");
             return;
         }
-        if (isAltWMissingEarlierVisibleAnswer(target)) {
+        if (!target.boundedTurn && isAltWMissingEarlierVisibleAnswer(target)) {
             alert("Alt+W 偵測到最新回答前段未擷取完整，已取消複製以避免漏段。請檢查 Console 的回合容器診斷訊息。");
             console.warn('[AI Prompt Bridge] partial answer rejected', {source:target.source, chars:target.textLength});
             return;
@@ -6050,6 +6324,16 @@ ${body}
 
         if (target.source !== "selection" && target.source !== "dil-whole-response" && isLikelyWholeSessionElement(target.element)) {
             alert("Alt+W 只複製單段內容。偵測到候選內容像完整 session，已停止複製。請手動框選單段後再按 Alt+W；完整 session 請用 Alt+N。");
+            return;
+        }
+
+        // v1.93 defense in depth: one reply only. Never export an unverified
+        // DIL candidate as a full-session rich-text copy under Alt+W.
+        if (getSiteName() === 'ChatGPT' &&
+            !target.boundedTurn && document.querySelector('main [class*="DilResponseRoot"]') &&
+            !isVerifiedSingleDilAnswer(target)) {
+            console.warn('[AI Prompt Bridge] v1.93 Alt+W rejected non-single DIL target', target.source);
+            alert('Alt+W：無法確認最新單則 AI 回答的範圍，已取消複製。整個 Session 請使用 Alt+N。');
             return;
         }
 
@@ -6076,7 +6360,7 @@ ${body}
         // The legacy text blacklist is only a fallback heuristic. Never apply
         // historical conversation keywords to an independently verified DIL root.
         // validateDilCopyCompleteness already checked that substantive blocks survived.
-        if (target.source !== "selection" && !isVerifiedSingleDilAnswer(target) && isBadAltWExportText(textContent)) {
+        if (target.source !== "selection" && !target.boundedTurn && !isVerifiedSingleDilAnswer(target) && isBadAltWExportText(textContent)) {
             console.warn('[AI Prompt Bridge] v1.87 fallback text rejected', {
                 source:target.source, chars:textContent.length
             });
@@ -6103,7 +6387,23 @@ ${body}
 
 
         applyReadableOneNoteStyles(clone);
+        const preConversionText = clone.textContent || '';
+        const treeBlocks = promoteAltWRenderedTreeBlocks(clone);
+        const phaseSections = preserveAltWPhaseSections(clone);
+        const arrowProseRuns = preserveAltWInlineArrowProse(clone);
+        const officeCodeBlocks = preserveAltWCodeBlocksForOneNote(clone);
+        if (!validateAltWStructuredConversion(preConversionText, clone)) {
+            console.warn('[AI Prompt Bridge] v1.92 structural conversion lost text', {treeBlocks, phaseSections, arrowProseRuns, officeCodeBlocks});
+            alert('Alt+W：結構化排版轉換後內容校驗失敗，已停止複製；剪貼簿不變。');
+            return;
+        }
+        console.info('[AI Prompt Bridge] v1.92 OneNote structured export', {treeBlocks, phaseSections, arrowProseRuns, officeCodeBlocks});
 
+        if (clone.querySelector('table[data-ai-prompt-bridge-onenote-lines="1"]')) {
+            console.warn('[AI Prompt Bridge] v1.92 blocked legacy code-row table output');
+            alert('Alt+W：偵測到舊版逐行表格轉換，已停止複製以避免破壞排版。');
+            return;
+        }
         const htmlContent = normalizeReadableHtml(clone.innerHTML || `<pre>${escapeHtml(textContent)}</pre>`);
 
         try {
