@@ -1,14 +1,17 @@
-# AI Prompt Bridge v1.94.3
+# AI Prompt Bridge v1.94.4
 
-以 v1.94.2 為基準。ChatGPT Project 的繁體中文頁面使用獨立的已完成回合、Markdown 正文與操作列。新版依這些標記擷取正文，並將只有圖片附件的使用者訊息計入回合。
+以 v1.94.3 為基準。ChatGPT Project 的繁體中文頁面使用獨立的已完成回合、Markdown 正文與操作列。新版依這些標記擷取正文，並將只有圖片附件的使用者訊息計入回合。
 
 ## 安裝
 
 1. 在 Tampermonkey 編輯原本的 AI Prompt Bridge。
-2. 以 `AI_Prompt_Bridge_v1.94.3.user.js` 完整取代原始碼並儲存；TXT 是完全相同的備份。
+2. 以 `AI_Prompt_Bridge_v1.94.4.user.js` 完整取代原始碼並儲存；TXT 是完全相同的備份。
 3. 重新整理 ChatGPT 頁面，再使用快捷鍵。請只啟用一份腳本。
 
 ## 修正內容
+
+- Alt+W 與 Alt+N 的 OneNote HTML 匯出會把有獨立上下箭頭的流程圖轉成逐行段落，保留來源換行與縮排。
+- 引文保留原有段落與行內標記，並以灰色左欄和縮排和正文區隔。
 
 - Alt+W 在網頁層的快捷鍵處理前接收按鍵，只把最新 AI 回答寫成 HTML 和純文字。若主要剪貼簿 API 失敗，改用瀏覽器複製事件寫入相同兩種格式。
 - Alt+W 和 Alt+N 使用相同的 OneNote HTML 外層和 20 pt 正文字級。Alt+W 仍使用既有段落、箭頭、樹狀目錄、Phase 和表格轉換。
@@ -38,7 +41,7 @@
 安裝 Node.js 與 Playwright，執行 `npx playwright install chromium`，再執行：
 
 ```sh
-node --check AI_Prompt_Bridge_v1.94.3.user.js
+node --check AI_Prompt_Bridge_v1.94.4.user.js
 node test-regression.cjs
 ```
 

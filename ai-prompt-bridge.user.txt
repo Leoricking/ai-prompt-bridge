@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AI Prompt Bridge
 // @namespace    https://ai-prompt-bridge.local/ai-prompt-bridge
-// @version      1.94.3
+// @version      1.94.4
 // @description  Cross-AI prompt bridge for ChatGPT, Gemini, Claude, DeepSeek, Qwen, Perplexity and Cursor workflows. Dual Alt+W modes: editable OneNote readable export and Alt+Shift+W ChatGPT visual snapshot.
 // @author       Rossi
 // @match        https://chatgpt.com/*
@@ -30,7 +30,7 @@
 (function () {
     "use strict";
 
-    const AI_PROMPT_BRIDGE_VERSION = "1.94.3";
+    const AI_PROMPT_BRIDGE_VERSION = "1.94.4";
     console.log("[AI Prompt Bridge] injected", AI_PROMPT_BRIDGE_VERSION, location.href);
 
     function showStartupProbe() {
@@ -5236,6 +5236,7 @@
 
         // v1.75: Do not add AI Session Export / Source / URL metadata to OneNote/Word.
         // The user wants clean content only.
+        preserveOneNoteCodeAndQuotes(transcript);
         const htmlContent = normalizeRichHtml(transcript.innerHTML);
         const plainText = textContent;
 
@@ -5753,6 +5754,57 @@
             console.warn("[AI Prompt Bridge] apply inline OneNote styles failed", error);
         }
         return root;
+    }
+
+
+    function preserveOneNoteCodeAndQuotes(root) {
+        for (const source of root.querySelectorAll('[data-code-block-source="true"] code, pre')) {
+            if (!root.contains(source)) continue;
+            const code = source.cloneNode(true);
+            code.querySelectorAll('br').forEach(br => br.replaceWith('\n'));
+            const raw = (code.textContent || '').replace(/\r\n?/g, '\n').replace(/\n$/, '');
+            const lines = raw.split('\n');
+            // A standalone arrow on a source line identifies a vertical
+            // flow diagram. Keep ordinary code and inline arrows as-is.
+            if (lines.length < 2 || !lines.some(line => /^\s*[↓↑]\s*$/.test(line))) continue;
+
+            const block = document.createElement('div');
+            block.setAttribute('data-ai-prompt-bridge-code-lines', '1');
+            block.style.cssText = 'background-color:#eeeeee;padding:7pt 9pt;margin:8pt 0 12pt;';
+            for (const line of lines) {
+                const row = document.createElement('p');
+                row.style.cssText = 'margin:0;line-height:1.45;font-family:Consolas,monospace;font-size:20pt;';
+                let column = 0;
+                let value = '';
+                for (const char of line) {
+                    const width = char === '\t' ? 4 - column % 4 : 1;
+                    value += char === ' ' || char === '\t' ? '\u00a0'.repeat(width) : char;
+                    column += width;
+                }
+                row.textContent = value || '\u00a0';
+                block.appendChild(row);
+            }
+            (source.closest('[data-code-block-source="true"]') || source).replaceWith(block);
+        }
+
+        for (const quote of root.querySelectorAll('blockquote')) {
+            const table = document.createElement('table');
+            table.setAttribute('role', 'presentation');
+            table.setAttribute('data-ai-prompt-bridge-quote', '1');
+            table.style.cssText = 'border-collapse:collapse;width:auto;margin:6pt 0 10pt;';
+            const row = table.insertRow();
+            const rail = row.insertCell();
+            rail.setAttribute('aria-hidden', 'true');
+            rail.setAttribute('bgcolor', '#d1d5db');
+            rail.setAttribute('width', '5');
+            rail.style.cssText = 'width:5px;padding:0;border:0;background-color:#d1d5db;';
+            rail.textContent = '\u00a0';
+            const content = row.insertCell();
+            content.style.cssText = 'padding:0 0 0 12pt;border:0;vertical-align:top;';
+            while (quote.firstChild) content.appendChild(quote.firstChild);
+            quote.style.cssText = 'margin:0;padding:0;border:0;';
+            quote.appendChild(table);
+        }
     }
 
 
@@ -6434,6 +6486,7 @@ ${body}
         const phaseSections = preserveAltWPhaseSections(clone);
         const arrowProseRuns = preserveAltWInlineArrowProse(clone);
         const officeCodeBlocks = preserveAltWCodeBlocksForOneNote(clone);
+        preserveOneNoteCodeAndQuotes(clone);
         if (!validateAltWStructuredConversion(preConversionText, clone)) {
             console.warn('[AI Prompt Bridge] v1.92 structural conversion lost text', {treeBlocks, phaseSections, arrowProseRuns, officeCodeBlocks});
             alert('Alt+W：結構化排版轉換後內容校驗失敗，已停止複製；剪貼簿不變。');
@@ -6451,7 +6504,7 @@ ${body}
         const officeFont = '"Microsoft JhengHei", "Segoe UI", Calibri, "Noto Sans TC", Arial, sans-serif';
         clone.querySelectorAll("*").forEach(node => {
             if (!node.style) return;
-            node.style.fontFamily = node.closest('pre,code,[data-ai-prompt-bridge-codeblock="1"]')
+            node.style.fontFamily = node.closest('pre,code,[data-ai-prompt-bridge-codeblock="1"],[data-ai-prompt-bridge-code-lines="1"]')
                 ? 'Consolas, "Microsoft JhengHei", monospace' : officeFont;
             node.style.setProperty("font-size", "20pt", "important");
         });
