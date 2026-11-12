@@ -1,14 +1,17 @@
-# AI Prompt Bridge v1.94.0
+# AI Prompt Bridge v1.94.3
 
-以完整 v1.93.0 為基準，修正 ChatGPT 回合擷取。
+以 v1.94.2 為基準。ChatGPT Project 的繁體中文頁面使用獨立的已完成回合、Markdown 正文與操作列。新版依這些標記擷取正文，並將只有圖片附件的使用者訊息計入回合。
 
 ## 安裝
 
 1. 在 Tampermonkey 編輯原本的 AI Prompt Bridge。
-2. 以 `AI_Prompt_Bridge_v1.94.0.user.js` 完整取代原始碼並儲存；TXT 是完全相同的備份。
+2. 以 `AI_Prompt_Bridge_v1.94.3.user.js` 完整取代原始碼並儲存；TXT 是完全相同的備份。
 3. 重新整理 ChatGPT 頁面，再使用快捷鍵。請只啟用一份腳本。
 
 ## 修正內容
+
+- Alt+W 在網頁層的快捷鍵處理前接收按鍵，只把最新 AI 回答寫成 HTML 和純文字。若主要剪貼簿 API 失敗，改用瀏覽器複製事件寫入相同兩種格式。
+- Alt+W 和 Alt+N 使用相同的 OneNote HTML 外層和 20 pt 正文字級。Alt+W 仍使用既有段落、箭頭、樹狀目錄、Phase 和表格轉換。
 
 - Alt+W：先依 User 問題劃定回合範圍，再擷取最新 AI 回答；保留同一回答的多個區塊、表格與 Writing Block。整個 Session 的選取範圍不會取代最新回答。
 - Alt+N：使用相同的回合清單，按順序匯出全部已載入的 User 與 AI 訊息，並忽略目前選取範圍。
@@ -19,7 +22,7 @@
 ## 驗證與範圍
 
 已執行 Node.js 語法檢查與 Chromium 多回合 DOM 整合測試；詳見 TEST_REPORT.md。
-測試使用可重現 DOM、真實鍵盤事件及剪貼簿 API 攔截，檢查送出的 HTML/TXT。未實測 Windows Opera／Tampermonkey 與 OneNote 應用程式貼上。
+測試使用使用者提供的 Opera 頁面 DOM 及人工建立的回歸案例，在 Chromium 觸發鍵盤事件，讀回實際剪貼簿的 HTML 與純文字。部分既有結構測試使用 API 攔截。Windows Opera／Tampermonkey 即時頁面及 OneNote 應用程式貼上仍待實機驗證。
 匯出範圍為網頁目前已載入且可辨識的訊息，未載入的歷史訊息不在 DOM 內。
 
 ## 檔案
@@ -35,7 +38,7 @@
 安裝 Node.js 與 Playwright，執行 `npx playwright install chromium`，再執行：
 
 ```sh
-node --check AI_Prompt_Bridge_v1.94.0.user.js
+node --check AI_Prompt_Bridge_v1.94.3.user.js
 node test-regression.cjs
 ```
 

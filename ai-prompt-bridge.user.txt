@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AI Prompt Bridge
 // @namespace    https://ai-prompt-bridge.local/ai-prompt-bridge
-// @version      1.94.0
+// @version      1.94.3
 // @description  Cross-AI prompt bridge for ChatGPT, Gemini, Claude, DeepSeek, Qwen, Perplexity and Cursor workflows. Dual Alt+W modes: editable OneNote readable export and Alt+Shift+W ChatGPT visual snapshot.
 // @author       Rossi
 // @match        https://chatgpt.com/*
@@ -30,7 +30,7 @@
 (function () {
     "use strict";
 
-    const AI_PROMPT_BRIDGE_VERSION = "1.94.0";
+    const AI_PROMPT_BRIDGE_VERSION = "1.94.3";
     console.log("[AI Prompt Bridge] injected", AI_PROMPT_BRIDGE_VERSION, location.href);
 
     function showStartupProbe() {
@@ -544,6 +544,7 @@
     // v1.85: identify modern ChatGPT user bubbles without guessing that all main text is a message.
     // A DIL answer is not a user prompt. Never classify answer descendants as user messages.
     function getChatGPTUserBubbles(main, assistantRoots) {
+        const projectUser = '[class~="group/user-message"][data-chatgpt-search-unit-key$=":user"]';
         const selectors = [
             '[data-message-author-role="user"]',
             '[data-testid="user-message"]',
@@ -556,7 +557,8 @@
             '[class*="HumanMessage"]',
             '[data-role="user"]',
             '[aria-label="You said"]',
-            '[aria-label="你說"]'
+            '[aria-label="你說"]',
+            projectUser
         ];
         const isAssistant = el => assistantRoots.some(a => a === el || a.contains(el) || el.contains(a));
         const excluded = el => !el || !main.contains(el) ||
@@ -576,7 +578,7 @@
             if (excluded(el)) continue;
             // Prefer the user text over any enclosing toolbar, but keep multiline prompts.
             const text = cleanExportMultiline(el.innerText || el.textContent || '');
-            if (!text || !text.trim()) continue;
+            if (!text.trim() && !(el.matches(projectUser) && el.querySelector('img'))) continue;
             if (el.querySelector('[class*="DilResponseRoot"]')) continue;
             if (out.some(prev => prev === el || prev.contains(el))) continue;
             for (let i=out.length-1; i>=0; i--) if (el.contains(out[i])) out.splice(i,1);
@@ -617,6 +619,46 @@
         const extract = (range,anchor) => {
             const clipped = document.createElement('div');
             clipped.appendChild(range.cloneContents());
+            // Some Project renderers expose only the answer action bar.
+            // A standalone Copy button (for example on code) is insufficient.
+            if (!clipped.querySelector(answerSelector) && users.length) {
+                // The Project renderer exposes a completed turn and one or more
+                // Markdown body containers before its localized action bar.
+                const projectBars = [...clipped.querySelectorAll(
+                    '[data-talvt-turn-state="complete"] .turn-action-controls'
+                )].filter(bar => !bar.closest('[class~="group/user-message"]') &&
+                    bar.querySelector('button[aria-label="複製"],button[aria-label="Copy"],[data-testid="copy-turn-action-button"]') &&
+                    bar.closest('[data-talvt-turn-state]').querySelector('[data-markdown-text-style]'));
+                const copy = '[data-testid="copy-turn-action-button"],button[aria-label="Copy"],button[aria-label="複製"]';
+                const feedback = '[data-testid="good-response-turn-action-button"],'+
+                    '[data-testid="bad-response-turn-action-button"],button[aria-label="Good response"],'+
+                    'button[aria-label="Bad response"],button[aria-label="好回覆"],button[aria-label="差回覆"]';
+                const bars = new Set(projectBars);
+                for (const button of projectBars.length ? [] : clipped.querySelectorAll(copy)) {
+                    for (let bar = button.parentElement; bar && bar !== clipped; bar = bar.parentElement) {
+                        if (bar.querySelector(feedback) && !bar.querySelector('p,h1,h2,h3,h4,pre,table')) {
+                            bars.add(bar);
+                            break;
+                        }
+                    }
+                }
+                if (bars.size !== 1) return;
+                const body = document.createRange();
+                const bar = [...bars][0];
+                body.selectNodeContents(projectBars.length ? bar.closest('[data-talvt-turn-state]') : clipped);
+                body.setEndBefore(bar);
+                const fragment = body.cloneContents();
+                if (!fragment.querySelector('p,h1,h2,h3,h4,h5,h6,pre,ul,ol,blockquote,table')) return;
+                const answer = document.createElement('div');
+                answer.className = 'markdown';
+                const markdown = projectBars.length ? [...fragment.querySelectorAll('[data-markdown-text-style]')] : [];
+                if (markdown.length === 1 && markdown[0].textContent.trim() === fragment.textContent.trim()) {
+                    answer.append(...markdown[0].childNodes);
+                } else {
+                    answer.appendChild(fragment);
+                }
+                clipped.replaceChildren(answer);
+            }
             clipped.querySelectorAll('nav,aside,form,textarea,input,button,script,style,'+
                 '[data-testid*="composer"],#'+PANEL_ID+',#'+BUBBLE_ID).forEach(n=>n.remove());
             // Keep outermost answer containers only AFTER clipping, so sibling
@@ -5869,24 +5911,6 @@ ${body}
     }
 
 
-    function normalizeReadableHtml(html) {
-        const body = safeText(html).trim();
-        // Office may discard <style>; applyReadableOneNoteStyles also writes inline styles.
-        return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
-body,.ai-prompt-bridge-onenote-readable {font-family:"Microsoft JhengHei","Noto Sans TC",Arial,sans-serif;font-size:18pt;line-height:1.55;color:#111;background:#fff;}
-.ai-prompt-bridge-onenote-readable p {margin:6pt 0 10pt;}
-.ai-prompt-bridge-onenote-readable h1 {font-size:24pt;font-weight:bold;}
-.ai-prompt-bridge-onenote-readable h2 {font-size:22pt;font-weight:bold;}
-.ai-prompt-bridge-onenote-readable h3,.ai-prompt-bridge-onenote-readable h4 {font-size:20pt;font-weight:bold;}
-.ai-prompt-bridge-onenote-readable ul,.ai-prompt-bridge-onenote-readable ol {margin:6pt 0 10pt;padding-left:26pt;}
-.ai-prompt-bridge-onenote-readable table {border-collapse:collapse;}
-.ai-prompt-bridge-onenote-readable th,.ai-prompt-bridge-onenote-readable td {border-bottom:1px solid #e5e7eb;padding:5pt 7pt;vertical-align:top;}
-.ai-prompt-bridge-onenote-readable [data-ai-prompt-bridge-codeblock="1"] {background:#f3f4f6;border:0;}
-.ai-prompt-bridge-onenote-readable [data-ai-prompt-bridge-codeblock-cell="1"] {background:#f3f4f6;border:0;}
-.ai-prompt-bridge-onenote-readable [data-ai-prompt-bridge-onenote-lines="1"] td {white-space:nowrap;font:11pt Consolas,"Courier New",monospace;border:0!important;word-break:normal;overflow-wrap:normal;}
-</style></head><body><div class="ai-prompt-bridge-onenote-readable" style="font-family:'Microsoft JhengHei','Noto Sans TC',Arial,sans-serif;font-size:18pt;line-height:1.55;color:#111111;background-color:#ffffff;">${body}</div></body></html>`;
-    }
-
     function normalizeVisualSnapshotHtml(html) {
         const body = safeText(html).trim();
 
@@ -6309,6 +6333,24 @@ ${body}
             b.includes(a.slice(-Math.min(32,a.length)));
     }
 
+    function writeSingleAnswerViaCopyEvent(html, text) {
+        let written = false;
+        const onCopy = event => {
+            if (!event.clipboardData) return;
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            event.clipboardData.setData("text/plain", text);
+            event.clipboardData.setData("text/html", html);
+            written = true;
+        };
+        window.addEventListener("copy", onCopy, true);
+        try {
+            return document.execCommand("copy") && written;
+        } finally {
+            window.removeEventListener("copy", onCopy, true);
+        }
+    }
+
     async function copyRichTextForOffice() {
         const target = await getAltWRichCopyTargetStable("Alt+W");
 
@@ -6323,7 +6365,7 @@ ${body}
         }
 
         if (target.source !== "selection" && target.source !== "dil-whole-response" && isLikelyWholeSessionElement(target.element)) {
-            alert("Alt+W 只複製單段內容。偵測到候選內容像完整 session，已停止複製。請手動框選單段後再按 Alt+W；完整 session 請用 Alt+N。");
+            alert("Alt+W 偵測到候選內容可能包含多個回合，已取消複製。完整 Session 請使用 Alt+N。");
             return;
         }
 
@@ -6404,7 +6446,16 @@ ${body}
             alert('Alt+W：偵測到舊版逐行表格轉換，已停止複製以避免破壞排版。');
             return;
         }
-        const htmlContent = normalizeReadableHtml(clone.innerHTML || `<pre>${escapeHtml(textContent)}</pre>`);
+        // Match the Alt+N clipboard envelope and apply the base font inline
+        // for Office paste targets that discard stylesheets.
+        const officeFont = '"Microsoft JhengHei", "Segoe UI", Calibri, "Noto Sans TC", Arial, sans-serif';
+        clone.querySelectorAll("*").forEach(node => {
+            if (!node.style) return;
+            node.style.fontFamily = node.closest('pre,code,[data-ai-prompt-bridge-codeblock="1"]')
+                ? 'Consolas, "Microsoft JhengHei", monospace' : officeFont;
+            node.style.setProperty("font-size", "20pt", "important");
+        });
+        const htmlContent = normalizeRichHtml(clone.innerHTML || `<pre>${escapeHtml(textContent)}</pre>`);
 
         try {
             if (typeof ClipboardItem !== "undefined" && navigator.clipboard?.write) {
@@ -6418,10 +6469,18 @@ ${body}
                 return;
             }
         } catch (error) {
-            console.warn("[AI Prompt Bridge] rich clipboard failed, fallback to plain text", error);
+            console.warn("[AI Prompt Bridge] Alt+W rich clipboard write failed", error);
         }
 
-        await copyText(textContent, `Alt+W 可讀版已降級複製純文字（${textContent.length} 字）`);
+        try {
+            if (writeSingleAnswerViaCopyEvent(htmlContent, textContent)) {
+                toast(`Alt+W 已複製 OneNote 可讀版：${textContent.length} 字`);
+                return;
+            }
+        } catch (error) {
+            console.warn("[AI Prompt Bridge] Alt+W copy event failed", error);
+        }
+        alert("Alt+W 無法寫入新版剪貼簿內容。剪貼簿可能仍保留上一次複製的內容。");
     }
 
 
@@ -6835,6 +6894,15 @@ ${body}
         setTimeout(() => el.remove(), 1700);
     }
 
+    // Handle Alt+W before the event reaches document-level page shortcuts.
+    window.addEventListener("keydown", async event => {
+        if (!event.altKey || event.shiftKey || event.ctrlKey || event.metaKey ||
+            (event.code !== "KeyW" && (event.key || "").toLowerCase() !== "w")) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        if (!event.repeat) await copyRichTextForOffice();
+    }, true);
+
     document.addEventListener("keydown", async (event) => {
         const key = (event.key || "").toLowerCase();
         const code = event.code || "";
@@ -6886,13 +6954,6 @@ ${body}
             event.stopPropagation();
             event.stopImmediatePropagation();
             await copyVisualSnapshotForOneNote();
-        }
-
-        if (event.altKey && !event.shiftKey && !event.ctrlKey && (key === "w" || code === "KeyW")) {
-            event.preventDefault();
-            event.stopPropagation();
-            event.stopImmediatePropagation();
-            await copyRichTextForOffice();
         }
 
         if (event.altKey && !event.shiftKey && !event.ctrlKey && (key === "b" || code === "KeyB")) {
