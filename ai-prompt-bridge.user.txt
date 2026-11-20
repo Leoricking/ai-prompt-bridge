@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AI Prompt Bridge
 // @namespace    https://ai-prompt-bridge.local/ai-prompt-bridge
-// @version      1.94.4
+// @version      1.94.9
 // @description  Cross-AI prompt bridge for ChatGPT, Gemini, Claude, DeepSeek, Qwen, Perplexity and Cursor workflows. Dual Alt+W modes: editable OneNote readable export and Alt+Shift+W ChatGPT visual snapshot.
 // @author       Rossi
 // @match        https://chatgpt.com/*
@@ -30,7 +30,7 @@
 (function () {
     "use strict";
 
-    const AI_PROMPT_BRIDGE_VERSION = "1.94.4";
+    const AI_PROMPT_BRIDGE_VERSION = "1.94.9";
     console.log("[AI Prompt Bridge] injected", AI_PROMPT_BRIDGE_VERSION, location.href);
 
     function showStartupProbe() {
@@ -543,7 +543,8 @@
 
     // v1.85: identify modern ChatGPT user bubbles without guessing that all main text is a message.
     // A DIL answer is not a user prompt. Never classify answer descendants as user messages.
-    function getChatGPTUserBubbles(main, assistantRoots) {
+    function getChatGPTUserBubbles(main, assistantRoots, latestOnly = false) {
+        const userTurn = '[data-turn="user"],[data-message-author-role="user"],[data-chatgpt-search-unit-key$=":user"],[data-content-search-unit-key$=":user"],[data-user-message-bubble="true"],[data-testid="user-message"],[class~="group/user-message"]';
         const projectUser = '[class~="group/user-message"][data-chatgpt-search-unit-key$=":user"]';
         const selectors = [
             '[data-message-author-role="user"]',
@@ -560,6 +561,7 @@
             '[aria-label="你說"]',
             projectUser
         ];
+        if (latestOnly) selectors.push(userTurn);
         const isAssistant = el => assistantRoots.some(a => a === el || a.contains(el) || el.contains(a));
         const excluded = el => !el || !main.contains(el) ||
             el.closest('nav,aside,header,footer,form,[role="textbox"],#'+PANEL_ID+',#'+BUBBLE_ID) ||
@@ -578,7 +580,8 @@
             if (excluded(el)) continue;
             // Prefer the user text over any enclosing toolbar, but keep multiline prompts.
             const text = cleanExportMultiline(el.innerText || el.textContent || '');
-            if (!text.trim() && !(el.matches(projectUser) && el.querySelector('img'))) continue;
+            if (latestOnly && !isActiveChatGPTContainer(el)) continue;
+            if (!text.trim() && !(latestOnly && (el.matches(userTurn) || el.querySelector('img'))) && !(el.matches(projectUser) && el.querySelector('img'))) continue;
             if (el.querySelector('[class*="DilResponseRoot"]')) continue;
             if (out.some(prev => prev === el || prev.contains(el))) continue;
             for (let i=out.length-1; i>=0; i--) if (el.contains(out[i])) out.splice(i,1);
@@ -590,8 +593,8 @@
     // The source DOM can be virtualized: only report the *loaded, identifiable* turns.
     // A complete-session command must have at least one verified user question, and
     // every DIL assistant section must remain in the captured ordered inventory.
-    function diagnoseUnifiedSession() {
-        const blocks = getUnifiedConversationBlocks();
+    function diagnoseUnifiedSession(scope) {
+        const blocks = getUnifiedConversationBlocks(scope);
         const users = blocks.filter(b=>b.role==='user').length;
         const assistants = blocks.filter(b=>b.role==='assistant').length;
         const status = {site:getSiteName(),users,assistants,blocks:blocks.length,
@@ -604,10 +607,27 @@
     // Only accept identifiable message containers. Never silently treat <main> as a session.
     // v1.94: One inventory for both shortcuts. Clip DOM by user boundaries BEFORE
     // accepting renderer roots: a DilResponseRoot can wrap the entire session.
-    function collectChatGPTBoundedTurns() {
-        const main = document.querySelector('main,[role="main"]');
+    function isActiveChatGPTContainer(el) {
+        return !el.closest('[hidden],[inert],[aria-hidden="true"]') &&
+            (el.checkVisibility({visibilityProperty: true}) ||
+                (getComputedStyle(el).display === 'contents' &&
+                 [...el.children].some(isActiveChatGPTContainer)));
+    }
+
+    function latestChatGPTThread() {
+        const selector = 'main,[role="main"]';
+        const mains = [...document.querySelectorAll(selector)].filter(isActiveChatGPTContainer);
+        const outer = mains.filter(el => !mains.some(other => other !== el && other.contains(el)));
+        if (outer.length !== 1) return null;
+        const threads = [...outer[0].querySelectorAll('[data-thread-user-message-navigation-content]')]
+            .filter(isActiveChatGPTContainer);
+        if (threads.length === 1) return threads[0];
+        return outer[0].querySelector('[data-thread-user-message-navigation-content]') ? null : outer[0];
+    }
+
+    function collectChatGPTBoundedTurns(latestOnly = false, main = latestOnly ? latestChatGPTThread() : document.querySelector('main,[role="main"]'), forPicker = false) {
         if (!main) return [];
-        const users = getChatGPTUserBubbles(main, []).sort((a,b) =>
+        const users = getChatGPTUserBubbles(main, [], latestOnly || forPicker).sort((a,b) =>
             a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1);
         const answerSelector = '[data-message-author-role="assistant"],[data-testid*="assistant-message"],'+
             '[class*="DilResponseRoot"],[class*="MarkdownRoot"],.markdown,.prose';
@@ -642,20 +662,30 @@
                         }
                     }
                 }
-                if (bars.size !== 1) return;
-                const body = document.createRange();
-                const bar = [...bars][0];
-                body.selectNodeContents(projectBars.length ? bar.closest('[data-talvt-turn-state]') : clipped);
-                body.setEndBefore(bar);
-                const fragment = body.cloneContents();
-                if (!fragment.querySelector('p,h1,h2,h3,h4,h5,h6,pre,ul,ol,blockquote,table')) return;
                 const answer = document.createElement('div');
                 answer.className = 'markdown';
-                const markdown = projectBars.length ? [...fragment.querySelectorAll('[data-markdown-text-style]')] : [];
-                if (markdown.length === 1 && markdown[0].textContent.trim() === fragment.textContent.trim()) {
-                    answer.append(...markdown[0].childNodes);
+                if ((latestOnly || forPicker) && !bars.size) {
+                    const bodies = [...clipped.querySelectorAll(
+                        '[data-chatgpt-search-unit-key$=":assistant"] [data-markdown-text-style],'+
+                        '[data-content-search-unit-key$=":assistant"] [data-markdown-text-style]'
+                    )];
+                    if (!bodies.length) return;
+                    bodies.filter(body => !bodies.some(other => other !== body && other.contains(body)))
+                        .forEach(body => answer.append(...body.childNodes));
                 } else {
-                    answer.appendChild(fragment);
+                    if (bars.size !== 1) return;
+                    const body = document.createRange();
+                    const bar = [...bars][0];
+                    body.selectNodeContents(projectBars.length ? bar.closest('[data-talvt-turn-state]') : clipped);
+                    body.setEndBefore(bar);
+                    const fragment = body.cloneContents();
+                    if (!fragment.querySelector('p,h1,h2,h3,h4,h5,h6,pre,ul,ol,blockquote,table')) return;
+                    const markdown = projectBars.length ? [...fragment.querySelectorAll('[data-markdown-text-style]')] : [];
+                    if (markdown.length === 1 && markdown[0].textContent.trim() === fragment.textContent.trim()) {
+                        answer.append(...markdown[0].childNodes);
+                    } else {
+                        answer.appendChild(fragment);
+                    }
                 }
                 clipped.replaceChildren(answer);
             }
@@ -677,9 +707,17 @@
             // Without a user boundary, only explicit assistant message roots
             // establish distinct replies. A renderer class alone proves nothing.
             const explicit = [...main.querySelectorAll('[data-message-author-role="assistant"],[data-testid*="assistant-message"]')];
-            explicit.filter(n=>!explicit.some(p=>p!==n && p.contains(n))).forEach(n=>{
+            explicit.filter(n=>(!latestOnly || isActiveChatGPTContainer(n)) && !explicit.some(p=>p!==n && p.contains(n))).forEach(n=>{
                 const range = document.createRange(); range.selectNode(n); extract(range,n);
             });
+            return blocks;
+        }
+        if (latestOnly) {
+            const lastUser = users[users.length - 1];
+            const range = document.createRange();
+            range.selectNodeContents(main);
+            range.setStartAfter(lastUser);
+            extract(range, lastUser);
             return blocks;
         }
         // Include an already loaded answer whose earlier user turn is virtualized.
@@ -698,8 +736,8 @@
         return blocks;
     }
 
-    function getBoundedLatestChatGPTAnswer() {
-        const blocks = collectChatGPTBoundedTurns();
+    function getBoundedLatestChatGPTAnswer(latestOnly) {
+        const blocks = collectChatGPTBoundedTurns(latestOnly);
         const latest = blocks[blocks.length-1];
         // A newly submitted unanswered user prompt must not copy an older reply.
         if (!latest || latest.role !== 'assistant') return null;
@@ -708,11 +746,11 @@
             boundedTurn:true};
     }
 
-    function getUnifiedConversationBlocks() {
+    function getUnifiedConversationBlocks(scope) {
         const site = getSiteName();
-        if (site === 'ChatGPT') return collectChatGPTBoundedTurns();
+        if (site === 'ChatGPT') return collectChatGPTBoundedTurns(false, scope);
         if (site !== 'Gemini') return [];
-        const main = document.querySelector('main') || document.querySelector('[role="main"]');
+        const main = scope === undefined ? document.querySelector('main,[role="main"]') : scope;
         if (!main) return [];
         const blocks = [];
         const cleanText = el => cleanExportMultiline(el?.innerText || el?.textContent || '');
@@ -766,8 +804,7 @@
         return unique;
     }
 
-    function buildUnifiedSessionTranscript() {
-        const blocks = getUnifiedConversationBlocks();
+    function buildUnifiedSessionTranscript(blocks = getUnifiedConversationBlocks()) {
         if (!blocks.length) return null;
         const transcript = document.createElement('div');
         transcript.setAttribute('data-ai-prompt-bridge-transcript','1');
@@ -909,9 +946,9 @@
         return await gmGet(STORAGE_KEY, null);
     }
 
-    function copyText(text, message = "已複製到剪貼簿") {
+    function copyText(text, message = "已複製到剪貼簿", duration) {
         GM_setClipboard(text, "text");
-        toast(message);
+        toast(message, undefined, duration);
     }
 
     function getProjectTextSource(payload = null) {
@@ -3913,7 +3950,7 @@
         }
 
         if (!isLatestChatGPTAnswerReady()) return null;
-        return getBoundedLatestChatGPTAnswer();
+        return getBoundedLatestChatGPTAnswer(modeLabel === 'Alt+W');
     }
 
     function getSelectionHtml() {
@@ -5200,7 +5237,263 @@
         return normalizeText(lines.join(" "));
     }
 
-    async function copyFullSessionRichTextForOffice(triggerName = "Alt+N") {
+    function numberedRounds(blocks) {
+        const rounds = [];
+        for (const block of blocks) {
+            if (block.role === 'user') rounds.push([block]);
+            if (block.role === 'assistant' && rounds.length) rounds[rounds.length - 1].push(block);
+        }
+        return rounds;
+    }
+
+    async function scanChatGPTRounds(scope, url) {
+        const read = () => numberedRounds(collectChatGPTBoundedTurns(false, scope, true));
+        const initial = read();
+        const anchor = initial[0]?.[0].node || scope.querySelector('[data-turn-key],article') || scope;
+        let scroller = anchor.parentElement;
+        while (scroller && !(scroller.scrollHeight > scroller.clientHeight + 2 &&
+            /auto|scroll|overlay/.test(getComputedStyle(scroller).overflowY))) scroller = scroller.parentElement;
+        scroller ||= document.scrollingElement;
+        if (!scroller?.clientHeight || scroller.scrollHeight <= scroller.clientHeight + 2) return initial;
+
+        const originalTop = scroller.scrollTop;
+        const ordered = new Map();
+        const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+        const atTarget = () => location.href === url && scope.isConnected;
+        const move = y => scroller.scrollTo({top:y, behavior:'instant'});
+        function capture(batch) {
+            for (const round of batch) {
+                const user = round[0].node;
+                const marker = user.closest('[data-turn-key],[data-message-id],[data-chatgpt-search-message-ids]') ||
+                    user.querySelector('[data-message-id],[data-chatgpt-search-message-ids]');
+                const key = marker?.getAttribute('data-chatgpt-search-message-ids') ||
+                    marker?.getAttribute('data-message-id') || marker?.getAttribute('data-turn-key') ||
+                    user.closest('[data-testid^="conversation-turn-"]')?.getAttribute('data-testid') || user;
+                const prev = ordered.get(key);
+                if (!prev || round.length > prev.length ||
+                    (round.length === prev.length && round.at(-1).text.length > prev.at(-1).text.length)) {
+                    ordered.set(key, round.map(block => ({...block, node:block.node.cloneNode(true)})));
+                }
+            }
+        }
+        toast('Alt+J 正在讀取對話歷史，完成後會回到原位置。');
+        try {
+            // Reaching the top can prepend older pages and move the scroll anchor.
+            let height = -1;
+            for (let attempt = 0; attempt < 24 && atTarget(); attempt++) {
+                move(0);
+                await pause(550);
+                if (scroller.scrollTop <= 1 && height === scroller.scrollHeight) break;
+                height = scroller.scrollHeight;
+            }
+            while (atTarget()) {
+                capture(read());
+                const remaining = scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop;
+                if (remaining <= 2) {
+                    await pause(350);
+                    if (!atTarget()) return [];
+                    capture(read());
+                    if (scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop <= 2) break;
+                }
+                const before = scroller.scrollTop;
+                move(before + Math.max(1, Math.floor(scroller.clientHeight * 0.85)));
+                await pause(130);
+                if (scroller.scrollTop <= before + 0.5) break;
+            }
+            if (!atTarget()) return [];
+            return ordered.size ? [...ordered.values()] : initial;
+        } finally {
+            if (atTarget()) move(originalTop);
+        }
+    }
+
+    let roundPickerLoading = false;
+    async function showRoundPicker() {
+        const id = 'ai-prompt-bridge-round-picker';
+        if (document.getElementById(id) || roundPickerLoading) return;
+        const originalUrl = location.href;
+        const site = getSiteName();
+        let scope = latestChatGPTThread();
+        if (site === 'ChatGPT' && !scope) {
+            const mains = [...document.querySelectorAll('main,[role="main"]')].filter(isActiveChatGPTContainer);
+            const outer = mains.filter(main => !mains.some(other => other !== main && other.contains(main)));
+            if (outer.length === 1) scope = outer[0];
+        }
+        let blocks = [];
+        let scanned;
+        if (scope && site === 'ChatGPT') {
+            roundPickerLoading = true;
+            try {
+                // Some Project layouts mark only the currently navigated turn.
+                const main = scope.closest('main,[role="main"]') || scope;
+                scanned = await scanChatGPTRounds(main, originalUrl);
+                if (location.href !== originalUrl) return;
+            } finally { roundPickerLoading = false; }
+        } else if (scope && site === 'Gemini') {
+            blocks = getUnifiedConversationBlocks(scope);
+        } else if (scope) {
+            const users = '[data-message-author-role="user"],[data-testid="user-message"]';
+            const answers = '[data-message-author-role="assistant"],[data-testid="assistant-message"],.font-claude-message';
+            const roles = users + ',' + answers;
+            blocks = [...scope.querySelectorAll(roles)]
+                .filter(node => !node.parentElement.closest(roles) && isActiveChatGPTContainer(node))
+                .map(node => ({node, role:node.matches(users) ? 'user' : 'assistant', text:node.innerText.trim()}));
+        }
+        const rounds = scanned || numberedRounds(blocks);
+        if (!rounds.length) {
+            alert('目前頁面無法辨識問答回合。請先開啟對話並載入訊息。');
+            return;
+        }
+        const dialog = document.createElement('dialog');
+        dialog.id = id;
+        dialog.style.cssText = 'width:min(620px,88vw);max-height:80vh;margin:auto;padding:18px;border:1px solid #aaa;border-radius:10px;background:white;color:#222;font:15px/1.5 system-ui;';
+        const heading = document.createElement('strong');
+        heading.id = id + '-title';
+        heading.textContent = '選擇問答回合（已載入 ' + rounds.length + ' 輪）';
+        dialog.setAttribute('aria-labelledby', heading.id);
+        const list = document.createElement('ol');
+        list.style.cssText = 'max-height:48vh;overflow:auto;padding-left:3em;list-style:decimal;margin:10px 0;';
+        const form = document.createElement('form');
+        form.style.cssText = 'display:flex;gap:10px;align-items:center;flex-wrap:wrap;';
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.inputMode = 'numeric';
+        input.placeholder = '輸入編號，按 Enter 複製';
+        input.setAttribute('aria-label', '問答回合編號');
+        input.style.cssText = 'width:15em;padding:5px;border:1px solid #aaa;';
+        const status = document.createElement('div');
+        status.setAttribute('role', 'status');
+        let copying = false;
+        async function select(number) {
+            if (copying) return;
+            if (location.href !== originalUrl) {
+                dialog.close();
+                alert('目前對話已切換，請重新按 Alt+J。');
+                return;
+            }
+            const round = rounds[number-1];
+            if (!round || round.length < 2) {
+                status.textContent = round ? '這一輪尚無可辨識的回答。' : '請輸入 1 到 ' + rounds.length + ' 的整數。';
+                input.select();
+                return;
+            }
+            copying = true;
+            try {
+                if (await copyFullSessionRichTextForOffice('第 ' + number + ' 輪', round)) dialog.close();
+            } catch (_) {
+                status.textContent = '剪貼簿寫入失敗，請再試一次。';
+            } finally { copying = false; }
+        }
+        const preview = block => (block.text || '').replace(/\s+/g,' ').trim().slice(0,88) || '圖片或附件';
+        rounds.forEach((round, index) => {
+            const li = document.createElement('li');
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.style.cssText = 'text-align:left;white-space:pre-line;padding:6px;color:inherit;background:transparent;width:100%;border:0;border-bottom:1px solid #ddd;';
+            button.textContent = '問　' + preview(round[0]) + '\n答　' + (round[1] ? preview(round[1]) : '尚無回答');
+            button.addEventListener('click', () => select(index+1));
+            const details = document.createElement('details');
+            const summary = document.createElement('summary');
+            summary.textContent = '預覽第 ' + (index + 1) + ' 輪全文';
+            summary.style.cssText = 'cursor:pointer;color:#24539a;padding:4px 0;';
+            details.append(summary);
+            details.addEventListener('toggle', () => {
+                if (!details.open || details.children.length > 1) return;
+                for (const block of round) {
+                    const label = document.createElement('strong');
+                    label.textContent = block.role === 'user' ? '問題' : '回答';
+                    const body = document.createElement('div');
+                    body.style.cssText = 'white-space:pre-wrap;overflow-wrap:anywhere;font-size:14px;line-height:1.6;margin:2px 0 12px;';
+                    body.textContent = block.text || '圖片或附件';
+                    details.append(label, body);
+                }
+            });
+            li.append(button, details);
+            list.append(li);
+        });
+        const submit = document.createElement('button');
+        submit.type = 'submit';
+        submit.textContent = '複製';
+        const close = document.createElement('button');
+        close.type = 'button';
+        close.textContent = '取消';
+        close.onclick = () => dialog.close();
+        form.onsubmit = event => {
+            event.preventDefault();
+            const digits = input.value.trim();
+            select(/^\d+$/.test(digits) ? Number(digits) : 0);
+        };
+        form.append(input, submit, close);
+        dialog.append(heading, list, form, status);
+        dialog.addEventListener('close', () => dialog.remove(), {once:true});
+        document.body.append(dialog);
+        dialog.showModal();
+        input.focus();
+    }
+
+    function sessionLink(value) {
+        let url;
+        try { url = new URL(value); } catch (_) { return null; }
+        if (url.protocol !== 'https:' || url.port || url.username || url.password) return null;
+        const routes = {
+            'chatgpt.com': /^\/(?:g\/[^/]+\/)?c\/[\w-]+\/?$/,
+            'chat.openai.com': /^\/c\/[\w-]+\/?$/,
+            'gemini.google.com': /^\/(?:u\/\d+\/)?app\/[\w-]+\/?$/,
+            'claude.ai': /^\/chat\/[\w-]+\/?$/,
+            'chat.deepseek.com': /^\/a\/chat\/s\/[\w-]+\/?$/,
+            'www.perplexity.ai': /^\/search\/[\w.-]+\/?$/,
+            'chat.qwen.ai': /^\/c\/[\w-]+\/?$/
+        };
+        if (!Object.hasOwn(routes, url.hostname) || !routes[url.hostname].test(url.pathname)) return null;
+        url.hash = '';
+        url.pathname = url.pathname.replace(/\/$/, '');
+        return url;
+    }
+
+    function sessionLabel() {
+        const current = sessionLink(location.href);
+        const site = getSiteName();
+        const selected = [...document.querySelectorAll('nav a[href],aside a[href],a[aria-current="page"]')]
+            .find(link => current && link.origin === current.origin &&
+                link.pathname.replace(/\/$/, '') === current.pathname && link.innerText?.trim());
+        const title = (selected?.innerText || document.title || '').replace(/\s+/g, ' ').trim();
+        const id = current?.pathname.split('/').pop();
+        return [site, title && title !== site ? title.slice(0, 100) : '', id].filter(Boolean).join(' ｜ ');
+    }
+
+    function chooseSession() {
+        const input = window.prompt('貼上要匯出的對話網址（ChatGPT、Gemini、Claude、DeepSeek、Perplexity 或 Qwen）', sessionLink(location.href)?.href || '');
+        if (input === null) return;
+        const target = sessionLink(input.trim());
+        if (!target) {
+            alert('請貼上已開啟的個別對話網址。首頁、分享頁或其他網址無法指定對話。');
+            return;
+        }
+        if (sessionLink(location.href)?.href === target.href) {
+            return copyFullSessionRichTextForOffice('指定對話');
+        }
+        target.hash = new URLSearchParams({apbExport: target.origin + target.pathname + target.search}).toString();
+        window.open(target.href, '_blank', 'noopener');
+    }
+
+    function showRequestedSessionExport() {
+        const requested = new URLSearchParams(location.hash.slice(1)).get('apbExport');
+        if (!requested || sessionLink(location.href)?.href !== requested) return;
+        const button = createButton('複製這個指定對話到 OneNote', async () => {
+            if (sessionLink(location.href)?.href !== requested) {
+                button.remove();
+                alert('目前分頁已切換對話，請重新指定。');
+                return;
+            }
+            if (await copyFullSessionRichTextForOffice('指定對話')) button.remove();
+        }, '#0f766e');
+        button.style.cssText += 'position:fixed;top:12px;right:16px;width:auto;z-index:2147483647;';
+        document.body.appendChild(button);
+        history.replaceState(history.state, '', location.pathname + location.search);
+    }
+
+    async function copyFullSessionRichTextForOffice(triggerName = "Alt+N", round = null) {
+        const label = sessionLabel();
         // Full-session export MUST ignore current selection.
         // Alt+W is the only selection/single-answer rich copy shortcut.
         try {
@@ -5210,14 +5503,19 @@
             }
         } catch (_) {}
 
-        if (['ChatGPT','Gemini'].includes(getSiteName())) {
-            const check = diagnoseUnifiedSession();
+        let transcript;
+        if (round) {
+            transcript = buildUnifiedSessionTranscript(round).transcript;
+        } else if (['ChatGPT','Gemini'].includes(getSiteName())) {
+            const check = diagnoseUnifiedSession(latestChatGPTThread());
             if (!check.valid) {
                 alert(`Alt+N 無法確認已載入完整對話（User ${check.status.users} / AI ${check.status.assistants}）。未改動剪貼簿。請查看 Console 的 v1.85 session verification；目前仍不能從不存在的 DOM 還原舊訊息。`);
                 return;
             }
+            transcript = buildUnifiedSessionTranscript(check.blocks).transcript;
+        } else {
+            transcript = buildFullSessionTranscriptElement();
         }
-        const transcript = buildFullSessionTranscriptElement();
         // Do not run cleanOfficeExportElement() on the whole transcript here.
         // Each message clone is already cleaned; transcript-level cleanup strips the user bubble/background styles.
         normalizeOfficeLayoutStyles(transcript);
@@ -5225,7 +5523,7 @@
         const messageCount = transcript.querySelectorAll("[data-ai-prompt-bridge-message]").length;
         const textContent = richElementToPlainText(transcript);
 
-        if (!textContent || textContent.length < 20) {
+        if ((!round && (!textContent || textContent.length < 20)) || (round && !textContent && !transcript.querySelector("img"))) {
             alert("抓到的 session 內容太短。請先往上捲動載入舊訊息，再按 Alt+N。");
             return;
         }
@@ -5237,6 +5535,7 @@
         // v1.75: Do not add AI Session Export / Source / URL metadata to OneNote/Word.
         // The user wants clean content only.
         preserveOneNoteCodeAndQuotes(transcript);
+        applyOfficeReadingSize(transcript);
         const htmlContent = normalizeRichHtml(transcript.innerHTML);
         const plainText = textContent;
 
@@ -5251,14 +5550,15 @@
 
                 const countLabel = messageCount ? `${messageCount} 則 / ` : "";
                 const warn = messageCount <= 1 ? "（只抓到 1 則，請先往上捲動載入舊訊息）" : "";
-                toast(`${triggerName} 全 Session 已複製到 OneNote / Word：${countLabel}${textContent.length} 字${warn}`);
-                return;
+                toast(`${triggerName} 已複製「${label}」到 OneNote / Word：${countLabel}${textContent.length} 字${warn}`, undefined, 6500);
+                return true;
             }
         } catch (error) {
             console.warn("[AI Prompt Bridge] full-session rich clipboard failed, fallback to plain text", error);
         }
 
-        await copyText(plainText, `${triggerName} 已降級複製完整 Session 純文字（${messageCount || "?"} 則 / ${textContent.length} 字）`);
+        copyText(plainText, `${triggerName} 已複製「${label}」純文字（${messageCount || "?"} 則 / ${textContent.length} 字）`, 6500);
+        return true;
     }
 
     function isUtilityButtonText(text) {
@@ -5808,6 +6108,12 @@
     }
 
 
+    function applyOfficeReadingSize(root) {
+        for (const element of root.querySelectorAll('*')) {
+            element.style?.setProperty('font-size', '16pt', 'important');
+        }
+    }
+
     function normalizeRichHtml(html) {
         const body = safeText(html).trim();
 
@@ -5819,7 +6125,7 @@
 body,
 .ai-prompt-bridge-onenote-export {
   font-family: "Microsoft JhengHei", "Segoe UI", Calibri, "Noto Sans TC", Arial, sans-serif;
-  font-size: 20pt !important;
+  font-size: 16pt !important;
   color: #111111;
   background: #ffffff;
   line-height: 1.6;
@@ -5830,7 +6136,7 @@ body,
 .ai-prompt-bridge-onenote-export th,
 .ai-prompt-bridge-onenote-export div,
 .ai-prompt-bridge-onenote-export span {
-  font-size: 20pt !important;
+  font-size: 16pt !important;
   line-height: 1.6;
   background: transparent;
 }
@@ -5839,7 +6145,7 @@ body,
 .ai-prompt-bridge-onenote-export code {
   white-space: pre-wrap;
   font-family: Consolas, "Cascadia Mono", "Courier New", monospace;
-  font-size: 20pt !important;
+  font-size: 16pt !important;
   line-height: 1.45;
 }
 .ai-prompt-bridge-onenote-export h1,
@@ -5882,7 +6188,7 @@ body,
 .ai-prompt-bridge-onenote-export [data-ai-prompt-bridge-codeblock="1"],
 .ai-prompt-bridge-onenote-export [data-ai-prompt-bridge-codeblock="1"] * {
   font-family: Consolas, "Microsoft JhengHei", "Noto Sans TC", monospace;
-  font-size: 20pt !important;
+  font-size: 16pt !important;
   line-height: 1.45;
 }
 .ai-prompt-bridge-onenote-export [data-ai-prompt-bridge-codeblock="1"] {
@@ -5925,7 +6231,7 @@ body,
   border: 1px solid #e5e7eb;
   padding: 10px;
   border-radius: 6px;
-  font-size: 20pt !important;
+  font-size: 16pt !important;
   line-height: 1.45;
 }
 .ai-prompt-bridge-onenote-export code {
@@ -5933,11 +6239,11 @@ body,
   background: transparent !important;
   background-color: transparent !important;
   padding: 0;
-  font-size: 20pt !important;
+  font-size: 16pt !important;
   box-shadow: none !important;
 }
 .ai-prompt-bridge-onenote-export pre code {
-  font-size: 20pt !important;
+  font-size: 16pt !important;
   background: transparent;
   padding: 0;
 }
@@ -5955,7 +6261,7 @@ body,
 </style>
 </head>
 <body>
-<div class="ai-prompt-bridge-onenote-export" style="font-family:'Microsoft JhengHei','Segoe UI',Calibri,'Noto Sans TC',Arial,sans-serif;font-size:20pt;line-height:1.6;color:#111111;background:#ffffff;">
+<div class="ai-prompt-bridge-onenote-export" style="font-family:'Microsoft JhengHei','Segoe UI',Calibri,'Noto Sans TC',Arial,sans-serif;font-size:16pt;line-height:1.6;color:#111111;background:#ffffff;">
 ${body}
 </div>
 </body>
@@ -6506,8 +6812,8 @@ ${body}
             if (!node.style) return;
             node.style.fontFamily = node.closest('pre,code,[data-ai-prompt-bridge-codeblock="1"],[data-ai-prompt-bridge-code-lines="1"]')
                 ? 'Consolas, "Microsoft JhengHei", monospace' : officeFont;
-            node.style.setProperty("font-size", "20pt", "important");
         });
+        applyOfficeReadingSize(clone);
         const htmlContent = normalizeRichHtml(clone.innerHTML || `<pre>${escapeHtml(textContent)}</pre>`);
 
         try {
@@ -6896,7 +7202,9 @@ ${body}
         content.appendChild(createButton("⑤ 給 ChatGPT 轉 Cursor Alt+V", () => copyPrompt(buildCursorFix, "已複製 Cursor Fix Prompt"), "#059669"));
         content.appendChild(createButton("⑥ 變成 Cursor Rule", () => copyPrompt(buildRule, "已複製 Make Rule Prompt"), "#7c3aed"));
         content.appendChild(createButton("⑦ Alt+S 全 Session 原始純文字", copyFullSessionRawText, "#be123c"));
-        content.appendChild(createButton("⑨ Alt+N 全 Session → OneNote/Word 20pt", () => copyFullSessionRichTextForOffice("Alt+N"), "#d97706"));
+        content.appendChild(createButton("⑨ Alt+N 全 Session → OneNote/Word 16pt", () => copyFullSessionRichTextForOffice("Alt+N"), "#d97706"));
+        content.appendChild(createButton("Alt+J 選擇問答回合", showRoundPicker, "#0f766e"));
+        content.appendChild(createButton("指定對話網址 → OneNote", chooseSession, "#0f766e"));
         content.appendChild(createButton("⑫ 整理成筆記 Prompt Alt+Shift+N", () => copyPrompt(buildOneNotePrompt, "已複製 OneNote 筆記整理 Prompt"), "#92400e"));
         content.appendChild(createButton("⑩ Alt+W 最新回答整段 → OneNote/Word", copyRichTextForOffice, "#0891b2"));
         content.appendChild(createButton("⑪ 全 Session → OneNote/Word 備用按鈕", () => copyFullSessionRichTextForOffice("Button"), "#0e7490"));
@@ -6930,7 +7238,7 @@ ${body}
         await updateStatus();
     }
 
-    function toast(message, color = "#10b981") {
+    function toast(message, color = "#10b981", duration = 1700) {
         const el = document.createElement("div");
         el.textContent = message;
         el.style.position = "fixed";
@@ -6944,10 +7252,17 @@ ${body}
         el.style.fontSize = "13px";
         el.style.boxShadow = "0 8px 24px rgba(0,0,0,.25)";
         (document.body || document.documentElement).appendChild(el);
-        setTimeout(() => el.remove(), 1700);
+        setTimeout(() => el.remove(), duration);
     }
 
     // Handle Alt+W before the event reaches document-level page shortcuts.
+    window.addEventListener("keydown", event => {
+        if (!event.altKey || event.shiftKey || event.ctrlKey || event.metaKey || event.code !== "KeyJ") return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        if (!event.repeat) showRoundPicker();
+    }, true);
+
     window.addEventListener("keydown", async event => {
         if (!event.altKey || event.shiftKey || event.ctrlKey || event.metaKey ||
             (event.code !== "KeyW" && (event.key || "").toLowerCase() !== "w")) return;
@@ -7058,6 +7373,7 @@ ${body}
         GM_registerMenuCommand("Alt+Shift+W Copy Single Answer Visual Snapshot", async () => {
             await copyVisualSnapshotForOneNote();
         });
+        GM_registerMenuCommand("指定對話網址 → OneNote", chooseSession);
         GM_registerMenuCommand("Alt+N Copy Full Session Rich Text", async () => {
             await copyFullSessionRichTextForOffice("Menu Alt+N");
         });
@@ -7065,6 +7381,7 @@ ${body}
 
     onReady(async () => {
         showStartupProbe();
+        showRequestedSessionExport();
         await ensurePanel();
         setTimeout(ensurePanel, 800);
         setTimeout(ensurePanel, 2000);
